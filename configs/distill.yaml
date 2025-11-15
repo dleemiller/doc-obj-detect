@@ -1,0 +1,48 @@
+# Knowledge distillation configuration
+
+teacher:
+  checkpoint: "outputs/finetune_doclaynet/checkpoints/best_model.pth"
+  backbone: "timm/vit_pe_spatial_base_patch16_512.fb"
+  detector: "deformable-detr"
+
+student:
+  backbone: "timm/convnextv2_base.fcmae"  # Smaller ConvNeXtV2 backbone
+  detector: "rt-detr"  # Real-time DETR for faster inference
+  num_classes: 11  # DocLayNet classes
+
+distillation:
+  loss_type: "kl"  # "kl" or "mse"
+  temperature: 3.0  # Temperature for KL divergence
+  alpha: 0.7  # Weight for distillation loss
+  beta: 0.3  # Weight for ground truth loss (alpha + beta = 1.0)
+  distill_features: true  # Also distill intermediate features
+
+data:
+  dataset: "doclaynet"
+  train_split: "train"
+  val_split: "val"
+  image_size: 512
+  batch_size: 16  # Can use larger batch for smaller student
+  num_workers: 8
+
+augmentation:
+  horizontal_flip: 0.5
+  rotate_limit: 5
+  brightness_contrast: 0.2
+  noise_std: 0.01
+
+training:
+  num_epochs: 30
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 1000
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 100
+
+output:
+  output_dir: "outputs/distill"
+  checkpoint_dir: "outputs/distill/checkpoints"
+  log_dir: "outputs/distill/logs"

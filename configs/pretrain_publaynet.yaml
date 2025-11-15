@@ -1,0 +1,37 @@
+# Pretraining configuration for PubLayNet dataset
+
+model:
+  backbone: "timm/vit_pe_spatial_base_patch16_512.fb"  # Vision transformer with perception encoder
+  detector: "deformable-detr"  # Or "detr" for simpler baseline
+  num_classes: 5  # PubLayNet: text, title, list, table, figure
+  freeze_backbone: false  # Train full model during pretraining
+
+data:
+  dataset: "publaynet"
+  train_split: "train"
+  val_split: "val"
+  image_size: 512
+  batch_size: 8  # Adjust based on 96GB VRAM
+  num_workers: 8
+
+augmentation:
+  horizontal_flip: 0.5
+  rotate_limit: 5  # Small rotations to preserve text readability
+  brightness_contrast: 0.2
+  noise_std: 0.01
+
+training:
+  num_epochs: 50
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 1000
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  save_steps: 1000
+  eval_steps: 1000
+  logging_steps: 100
+
+output:
+  output_dir: "outputs/pretrain_publaynet"
+  checkpoint_dir: "outputs/pretrain_publaynet/checkpoints"
+  log_dir: "outputs/pretrain_publaynet/logs"

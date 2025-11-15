@@ -1,0 +1,38 @@
+# Fine-tuning configuration for DocLayNet dataset
+
+model:
+  backbone: "timm/vit_pe_spatial_base_patch16_512.fb"
+  detector: "deformable-detr"
+  num_classes: 11  # DocLayNet classes
+  freeze_backbone: true  # Freeze backbone during fine-tuning
+  pretrained_checkpoint: "outputs/pretrain_publaynet/checkpoints/best_model.pth"
+
+data:
+  dataset: "doclaynet"
+  train_split: "train"
+  val_split: "val"
+  image_size: 512
+  batch_size: 8
+  num_workers: 8
+
+augmentation:
+  horizontal_flip: 0.5
+  rotate_limit: 5
+  brightness_contrast: 0.2
+  noise_std: 0.01
+
+training:
+  num_epochs: 20  # Fewer epochs for fine-tuning
+  learning_rate: 5.0e-5  # Lower LR for fine-tuning
+  weight_decay: 1.0e-4
+  warmup_steps: 500
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 50
+
+output:
+  output_dir: "outputs/finetune_doclaynet"
+  checkpoint_dir: "outputs/finetune_doclaynet/checkpoints"
+  log_dir: "outputs/finetune_doclaynet/logs"
