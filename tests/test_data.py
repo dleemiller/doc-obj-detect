@@ -91,3 +91,25 @@ def test_prepare_dataset_invalid_name():
     """Test invalid dataset name raises error."""
     with pytest.raises(ValueError, match="Unknown dataset"):
         prepare_dataset_for_training("invalid", "train", MagicMock())
+
+
+@patch("doc_obj_detect.data.load_publaynet")
+def test_visualize_augmentations(mock_load, tmp_path):
+    """Test augmentation visualization."""
+    from doc_obj_detect.data import visualize_augmentations
+
+    # Create mock dataset
+    mock_sample = {
+        "image": Image.fromarray(np.random.randint(0, 255, (512, 512, 3), dtype=np.uint8)),
+        "annotations": [{"bbox": [100, 100, 200, 150], "category_id": 0, "area": 30000}],
+    }
+    mock_dataset = MagicMock()
+    mock_dataset.__getitem__ = MagicMock(return_value=mock_sample)
+    mock_load.return_value = (mock_dataset, {"0": "text"})
+
+    # Run visualization
+    output_dir = str(tmp_path / "test_output")
+    visualize_augmentations("publaynet", num_samples=1, output_dir=output_dir)
+
+    # Verify output directory was created
+    assert (tmp_path / "test_output").exists()

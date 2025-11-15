@@ -1,5 +1,7 @@
 """Data loading, preprocessing, and augmentation for document object detection."""
 
+from pathlib import Path
+
 import albumentations as A
 import numpy as np
 import torch
@@ -291,15 +293,151 @@ def prepare_dataset_for_training(
     return dataset, class_labels
 
 
+def visualize_augmentations(
+    dataset_name: str,
+    num_samples: int = 4,
+    output_dir: str = "outputs/augmentation_samples",
+    cache_dir: str | None = None,
+) -> None:
+    """Generate sample images showing augmentation effects.
+
+    Args:
+        dataset_name: 'publaynet' or 'doclaynet'
+        num_samples: Number of samples to generate
+        output_dir: Directory to save visualization images
+        cache_dir: Optional cache directory for datasets
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    # Create output directory
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Load dataset (use val split which is smaller for faster loading)
+    if dataset_name.lower() == "publaynet":
+        dataset, class_labels = load_publaynet("val", cache_dir)
+    elif dataset_name.lower() == "doclaynet":
+        dataset, class_labels = load_doclaynet("val", cache_dir)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+
+    # Create augmentation transform
+    aug_config = {"rotate_limit": 5, "brightness_contrast": 0.2, "noise_std": 0.01}
+    transform = get_augmentation_transform(aug_config)
+
+    print(f"Generating {num_samples} augmentation samples...")
+
+    for idx in range(num_samples):
+        # Get sample
+        sample = dataset[idx]
+        image = sample["image"]
+        annotations = sample["annotations"]
+
+        # Convert to numpy for augmentation
+        image_np = np.array(image.convert("RGB"))
+
+        # Extract bboxes and labels
+        bboxes = [ann["bbox"] for ann in annotations]
+        category_ids = [ann["category_id"] for ann in annotations]
+
+        # Apply augmentations
+        augmented = transform(
+            image=image_np,
+            bboxes=bboxes,
+            category_ids=category_ids,
+        )
+
+        # Draw bboxes on both original and augmented
+        def draw_bboxes(img_np, boxes, labels):
+            img_draw = Image.fromarray(img_np)
+            draw = ImageDraw.Draw(img_draw)
+
+            colors = [
+                "#FF6B6B",
+                "#4ECDC4",
+                "#45B7D1",
+                "#FFA07A",
+                "#98D8C8",
+                "#F7DC6F",
+                "#BB8FCE",
+                "#85C1E2",
+                "#F8B739",
+                "#52B788",
+                "#F06292",
+            ]
+
+            for bbox, label in zip(boxes, labels, strict=False):
+                x, y, w, h = bbox
+                color = colors[int(label) % len(colors)]
+
+                # Draw rectangle
+                draw.rectangle([x, y, x + w, y + h], outline=color, width=3)
+
+                # Draw label
+                label_name = class_labels.get(int(label), str(int(label)))
+                try:
+                    font = ImageFont.truetype(
+                        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16
+                    )
+                except Exception:
+                    font = ImageFont.load_default()
+
+                # Draw label background
+                text_bbox = draw.textbbox((x, y - 20), label_name, font=font)
+                draw.rectangle(text_bbox, fill=color)
+                draw.text((x, y - 20), label_name, fill="white", font=font)
+
+            return np.array(img_draw)
+
+        # Draw bboxes
+        original_with_boxes = draw_bboxes(image_np, bboxes, category_ids)
+        augmented_with_boxes = draw_bboxes(
+            augmented["image"], augmented["bboxes"], augmented["category_ids"]
+        )
+
+        # Create side-by-side comparison
+        h, w = image_np.shape[:2]
+        comparison = np.zeros((h, w * 2, 3), dtype=np.uint8)
+        comparison[:, :w] = original_with_boxes
+        comparison[:, w:] = augmented_with_boxes
+
+        # Add labels
+        comparison_img = Image.fromarray(comparison)
+        draw = ImageDraw.Draw(comparison_img)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
+        except Exception:
+            font = ImageFont.load_default()
+
+        draw.text(
+            (20, 20), "Original", fill="white", font=font, stroke_width=2, stroke_fill="black"
+        )
+        draw.text(
+            (w + 20, 20), "Augmented", fill="white", font=font, stroke_width=2, stroke_fill="black"
+        )
+
+        # Save
+        output_file = output_path / f"sample_{idx:02d}.png"
+        comparison_img.save(output_file)
+        print(f"Saved: {output_file}")
+
+    print(f"\nSamples saved to {output_path}")
+
+
 def preprocess_cli() -> None:
     """CLI entry point for data preprocessing."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Preprocess datasets for training")
     parser.add_argument(
+        "command",
+        choices=["load", "visualize"],
+        help="Command to run: 'load' to verify dataset loading, 'visualize' to generate augmentation samples",
+    )
+    parser.add_argument(
         "dataset",
         choices=["publaynet", "doclaynet"],
-        help="Dataset to preprocess",
+        help="Dataset to use",
     )
     parser.add_argument(
         "--cache-dir",
@@ -307,17 +445,38 @@ def preprocess_cli() -> None:
         default=None,
         help="Cache directory for datasets",
     )
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=4,
+        help="Number of samples to generate (for visualize command)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="outputs/augmentation_samples",
+        help="Output directory for visualization samples",
+    )
     args = parser.parse_args()
 
-    print(f"Loading {args.dataset} dataset...")
-    if args.dataset == "publaynet":
-        train_ds, labels = load_publaynet("train", args.cache_dir)
-        val_ds, _ = load_publaynet("val", args.cache_dir)
-    else:
-        train_ds, labels = load_doclaynet("train", args.cache_dir)
-        val_ds, _ = load_doclaynet("val", args.cache_dir)
+    if args.command == "load":
+        print(f"Loading {args.dataset} dataset...")
+        if args.dataset == "publaynet":
+            train_ds, labels = load_publaynet("train", args.cache_dir)
+            val_ds, _ = load_publaynet("val", args.cache_dir)
+        else:
+            train_ds, labels = load_doclaynet("train", args.cache_dir)
+            val_ds, _ = load_doclaynet("val", args.cache_dir)
 
-    print("\nDataset loaded successfully!")
-    print(f"Train samples: {len(train_ds)}")
-    print(f"Val samples: {len(val_ds)}")
-    print(f"Classes: {labels}")
+        print("\nDataset loaded successfully!")
+        print(f"Train samples: {len(train_ds)}")
+        print(f"Val samples: {len(val_ds)}")
+        print(f"Classes: {labels}")
+
+    elif args.command == "visualize":
+        visualize_augmentations(
+            args.dataset,
+            num_samples=args.num_samples,
+            output_dir=args.output_dir,
+            cache_dir=args.cache_dir,
+        )
