@@ -2,9 +2,22 @@
 
 model:
   backbone: "timm/vit_pe_spatial_base_patch16_512.fb"  # Vision transformer with perception encoder
-  detector: "deformable-detr"  # Or "detr" for simpler baseline
   num_classes: 5  # PubLayNet: text, title, list, table, figure
   freeze_backbone: false  # Train full model during pretraining
+  use_pretrained_backbone: true
+
+detr:
+  # Deformable DETR architecture parameters
+  num_queries: 300  # Number of object queries
+  encoder_layers: 6
+  decoder_layers: 6
+  encoder_attention_heads: 8
+  decoder_attention_heads: 8
+  encoder_ffn_dim: 1024
+  decoder_ffn_dim: 1024
+  num_feature_levels: 4  # Multi-scale deformable attention
+  decoder_n_points: 4
+  encoder_n_points: 4
 
 data:
   dataset: "publaynet"
@@ -21,15 +34,23 @@ augmentation:
   noise_std: 0.01
 
 training:
-  num_epochs: 50
+  # TrainingArguments parameters - passed as **kwargs
+  num_train_epochs: 50
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
   warmup_steps: 1000
   gradient_accumulation_steps: 1
-  mixed_precision: "bf16"
+  bf16: true
   save_steps: 1000
   eval_steps: 1000
   logging_steps: 100
+  eval_strategy: "steps"
+  save_strategy: "steps"
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  push_to_hub: false
 
 output:
   output_dir: "outputs/pretrain_publaynet"

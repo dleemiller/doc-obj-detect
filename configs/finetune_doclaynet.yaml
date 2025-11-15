@@ -2,10 +2,23 @@
 
 model:
   backbone: "timm/vit_pe_spatial_base_patch16_512.fb"
-  detector: "deformable-detr"
   num_classes: 11  # DocLayNet classes
   freeze_backbone: true  # Freeze backbone during fine-tuning
+  use_pretrained_backbone: true
   pretrained_checkpoint: "outputs/pretrain_publaynet/checkpoints/best_model.pth"
+
+detr:
+  # Deformable DETR architecture parameters (same as pretraining)
+  num_queries: 300
+  encoder_layers: 6
+  decoder_layers: 6
+  encoder_attention_heads: 8
+  decoder_attention_heads: 8
+  encoder_ffn_dim: 1024
+  decoder_ffn_dim: 1024
+  num_feature_levels: 4
+  decoder_n_points: 4
+  encoder_n_points: 4
 
 data:
   dataset: "doclaynet"
@@ -22,15 +35,23 @@ augmentation:
   noise_std: 0.01
 
 training:
-  num_epochs: 20  # Fewer epochs for fine-tuning
+  # TrainingArguments parameters - passed as **kwargs
+  num_train_epochs: 20  # Fewer epochs for fine-tuning
   learning_rate: 5.0e-5  # Lower LR for fine-tuning
   weight_decay: 1.0e-4
   warmup_steps: 500
   gradient_accumulation_steps: 1
-  mixed_precision: "bf16"
+  bf16: true
   save_steps: 500
   eval_steps: 500
   logging_steps: 50
+  eval_strategy: "steps"
+  save_strategy: "steps"
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  push_to_hub: false
 
 output:
   output_dir: "outputs/finetune_doclaynet"
