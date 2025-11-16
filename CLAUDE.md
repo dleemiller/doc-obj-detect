@@ -12,9 +12,11 @@ This project implements document object detection using vision transformers and 
 3. Distill to smaller models (e.g., ConvNeXtV2 + RT-DETR)
 
 **Model Architecture:**
-- Backbone: Vision Transformer with perception encoder (timm/vit_pe_spatial_base_patch16_512.fb)
-- Detection Head: Deformable DETR or similar transformer-based object detector from HuggingFace Transformers
-- Distillation targets: Smaller backbone/detection combinations for deployment
+- Backbone: Vision Transformer with Perception Encoder (ViT-PE Spatial Gigantic - 1.8B params)
+  - Model: timm/vit_pe_spatial_gigantic_patch14_448.fb
+  - Key insight: Uses intermediate layer features for optimal detection performance
+- Detection Head: Deformable DETR with multi-scale deformable attention (num_feature_levels=4)
+- Distillation targets: Smaller backbone/detection combinations for deployment (e.g., ConvNeXtV2 + RT-DETR)
 
 ## Development Environment
 
@@ -30,13 +32,18 @@ This project implements document object detection using vision transformers and 
 **Project Scripts:**
 The project uses uv scripts for processing and training tasks:
 ```bash
-# Example preprocessing command pattern
+# Data preprocessing
 uv run preprocess-data publaynet
 uv run preprocess-data doclaynet
 
-# Training commands (pattern to be implemented)
+# Training (implemented and tested)
 uv run train --config configs/pretrain_publaynet.yaml
-uv run train --config configs/finetune_doclaynet.yaml
+uv run train --config configs/test_quick.yaml  # Quick 30-step test
+
+# Visualization
+uv run visualize-augmentations --num-samples 4 --output-dir outputs/viz
+
+# Future: Distillation
 uv run distill --teacher-checkpoint path/to/checkpoint --config configs/distill.yaml
 ```
 
@@ -50,9 +57,9 @@ ruff check .
 ruff format .
 
 # Run tests
-pytest
-pytest path/to/specific_test.py  # Single test file
-pytest path/to/test.py::test_function  # Single test function
+uv run pytest
+uv run pytest tests/test_data.py  # Single test file
+uv run pytest tests/test_data.py::test_apply_augmentations  # Single test
 
 # Pre-commit hooks
 pre-commit run --all-files
@@ -68,10 +75,12 @@ pre-commit run --all-files
 
 **Data Augmentation Considerations:**
 Document object detection requires different augmentations than natural images:
-- Preserve text readability
+- Preserve text readability (use small rotation limits like ±5°)
 - Maintain document structure and layout
-- Consider geometric transformations that simulate real scanning/camera variations
-- Avoid color augmentations that break document appearance
+- Use geometric transformations that simulate real scanning/camera variations
+- Avoid heavy color augmentations that break document appearance
+- **CRITICAL:** Avoid RandomShadow or similar occlusion augmentations that cover large portions of content
+- Focus on realistic scanning artifacts: brightness, contrast, blur, noise, JPEG compression
 
 **Training Approach:**
 - Use HuggingFace Trainers for all training loops
