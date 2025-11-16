@@ -37,6 +37,7 @@ preprocess-data = "doc_obj_detect.data:preprocess_cli"
 train = "doc_obj_detect.train:main"
 distill = "doc_obj_detect.distill:main"
 evaluate = "doc_obj_detect.evaluate:main"
+visualize-augmentations = "doc_obj_detect.visualize:main"
 
 [build-system]
 requires = ["hatchling"]

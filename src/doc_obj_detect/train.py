@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 import torch
-from transformers import Trainer, TrainingArguments
+from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
 
 from doc_obj_detect.config import load_train_config
 from doc_obj_detect.data import collate_fn, prepare_dataset_for_training
@@ -85,6 +85,10 @@ def train(config_path: str) -> None:
     output_dir = Path(output_config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Extract early_stopping_patience from training config (not a TrainingArguments param)
+    training_config_dict = config.training.model_dump()
+    early_stopping_patience = training_config_dict.pop("early_stopping_patience", None)
+
     # Build training arguments from config
     training_args = TrainingArguments(
         output_dir=str(output_dir),
@@ -94,8 +98,13 @@ def train(config_path: str) -> None:
         dataloader_num_workers=data_config.num_workers,
         per_device_train_batch_size=data_config.batch_size,
         per_device_eval_batch_size=data_config.batch_size,
-        **config.training.model_dump(),  # All training params from config
+        **training_config_dict,  # All training params from config
     )
+
+    # Setup callbacks
+    callbacks = []
+    if early_stopping_patience is not None:
+        callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
 
     # Initialize trainer
     trainer = Trainer(
@@ -105,6 +114,7 @@ def train(config_path: str) -> None:
         eval_dataset=val_dataset,
         data_collator=collate_fn,
         tokenizer=image_processor,  # Save processor with model
+        callbacks=callbacks,
     )
 
     print("\n" + "=" * 80)
