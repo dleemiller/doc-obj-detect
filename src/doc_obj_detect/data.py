@@ -84,12 +84,6 @@ def get_augmentation_transform(config: dict) -> A.Compose:
                 contrast_limit=config.get("brightness_contrast", 0.2),
                 p=0.5,
             ),
-            # Shadow effects from uneven lighting or page curl
-            A.RandomShadow(
-                shadow_roi=(0, 0, 1, 1),
-                num_shadows_limit=(1, 2),
-                p=0.2,
-            ),
             # Blur from poor scan quality or motion
             A.OneOf(
                 [
