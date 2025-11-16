@@ -47,7 +47,7 @@ def visualize_augmentations(num_samples: int = 4, output_dir: str | None = None)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
 
         image = example["image"]
-        annotations = example["objects"]
+        annotations = example["annotations"]
 
         # Original image
         ax1.imshow(image)
@@ -95,7 +95,7 @@ def visualize_augmentations(num_samples: int = 4, output_dir: str | None = None)
         ax2.axis("off")
 
         # Draw bounding boxes on augmented
-        aug_annotations = augmented["objects"]
+        aug_annotations = augmented["annotations"]
         for bbox, cat_id in zip(
             aug_annotations["bbox"], aug_annotations["category_id"], strict=False
         ):
