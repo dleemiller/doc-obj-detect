@@ -4,11 +4,33 @@ import argparse
 from pathlib import Path
 
 import torch
-from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
+from transformers import EarlyStoppingCallback, TrainerCallback, TrainingArguments
 
 from doc_obj_detect.config import load_train_config
 from doc_obj_detect.data import collate_fn, prepare_dataset_for_training
+from doc_obj_detect.metrics import compute_map
 from doc_obj_detect.model import create_model, get_trainable_parameters
+from doc_obj_detect.trainer import SplitLRTrainer
+
+
+def unfreeze_backbone(model):
+    for p in model.model.backbone.parameters():
+        p.requires_grad = True
+
+
+class UnfreezeBackboneCallback(TrainerCallback):
+    def __init__(self, unfreeze_at_step):
+        self.unfreeze_at_step = unfreeze_at_step
+        self.done = False
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if not self.done and state.global_step >= self.unfreeze_at_step:
+            model = kwargs["model"]
+            for p in model.model.backbone.parameters():
+                p.requires_grad = True
+            print(f"[Callback] Unfroze backbone at step {state.global_step}")
+            self.done = True
+            return control
 
 
 def train(config_path: str) -> None:
@@ -90,6 +112,8 @@ def train(config_path: str) -> None:
     early_stopping_patience = training_config_dict.pop("early_stopping_patience", None)
 
     # Build training arguments from config
+    # Note: SplitLRTrainer overrides get_eval_dataloader to use num_workers=0
+    # to avoid "too many open files" when train/eval dataloaders run concurrently
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         logging_dir=output_config.log_dir,
@@ -103,11 +127,24 @@ def train(config_path: str) -> None:
 
     # Setup callbacks
     callbacks = []
+    callbacks.append(
+        UnfreezeBackboneCallback(unfreeze_at_step=training_config_dict["warmup_steps"])
+    )
     if early_stopping_patience is not None:
         callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
 
+    # Create compute_metrics function with closure over image_processor and id2label
+    def compute_metrics_fn(eval_pred):
+        return compute_map(
+            eval_pred=eval_pred,
+            image_processor=image_processor,
+            id2label=dict(enumerate(class_labels)),
+            threshold=0.0,  # Post-process all detections, NMS happens in post_process
+            max_eval_images=2000,  # Limit to 2000 images to avoid OOM
+        )
+
     # Initialize trainer
-    trainer = Trainer(
+    trainer = SplitLRTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -115,6 +152,7 @@ def train(config_path: str) -> None:
         data_collator=collate_fn,
         tokenizer=image_processor,  # Save processor with model
         callbacks=callbacks,
+        compute_metrics=compute_metrics_fn,
     )
 
     print("\n" + "=" * 80)

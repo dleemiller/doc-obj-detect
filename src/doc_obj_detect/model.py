@@ -50,14 +50,35 @@ def create_model(
         for param in model.model.backbone.parameters():
             param.requires_grad = False
 
-    # Get image processor - use base deformable-detr processor
-    # For ViT backbones, we need exact square inputs
+    # Get image processor - start from base deformable-detr processor
+    # For ViT backbones, we want fixed square inputs
     image_processor = AutoImageProcessor.from_pretrained(
         "SenseTime/deformable-detr",
         do_resize=True,
         do_pad=True,
         size={"height": image_size, "width": image_size},
     )
+
+    # If we are using a *frozen* pretrained backbone that has its own processor,
+    # align the normalization stats (image_mean / image_std) with that backbone.
+    #
+    # This mainly helps HF backbones like "google/vit-base-patch16-224-in21k".
+    # For timm/* backbones there usually is no HF processor, and they are
+    # typically ImageNet-pretrained with the same mean/std as deformable-detr,
+    # so we just keep the defaults.
+    if use_pretrained_backbone and freeze_backbone:
+        try:
+            # Only try this if the backbone is a HF model, not timm/*
+            if not backbone.startswith("timm/"):
+                backbone_proc = AutoImageProcessor.from_pretrained(backbone)
+                if getattr(backbone_proc, "image_mean", None) is not None:
+                    image_processor.image_mean = backbone_proc.image_mean
+                if getattr(backbone_proc, "image_std", None) is not None:
+                    image_processor.image_std = backbone_proc.image_std
+        except Exception:
+            # If anything goes wrong (e.g. no processor for this backbone),
+            # just fall back to the deformable-detr defaults.
+            pass
 
     return model, image_processor
 

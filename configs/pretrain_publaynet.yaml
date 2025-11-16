@@ -3,8 +3,8 @@
 model:
   backbone: "timm/vit_pe_spatial_gigantic_patch14_448.fb"  # ViT-Gigantic (1.8B params) for maximum quality
   num_classes: 5  # PubLayNet: text, title, list, table, figure
-  freeze_backbone: false  # Train full model during pretraining
   use_pretrained_backbone: true
+  freeze_backbone: true
 
 detr:
   # Deformable DETR architecture parameters
@@ -39,14 +39,14 @@ augmentation:
 training:
   # TrainingArguments parameters - passed as **kwargs
   num_train_epochs: 12  # PubLayNet standard: 6-12 epochs with pretrained backbones
-  learning_rate: 1.0e-4
+  learning_rate: 5.0e-5
   weight_decay: 1.0e-4
-  warmup_steps: 1000
+  warmup_steps: 2000
   gradient_accumulation_steps: 1
   bf16: true
   save_steps: 500  # Save more frequently with fewer total steps
   eval_steps: 500
-  logging_steps: 100
+  logging_steps: 10
   eval_strategy: "steps"
   save_strategy: "steps"
   save_total_limit: 3
