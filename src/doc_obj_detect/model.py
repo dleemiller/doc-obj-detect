@@ -39,7 +39,6 @@ def create_model(
         use_timm_backbone=True,
         use_pretrained_backbone=use_pretrained_backbone,
         num_labels=num_classes,
-        auxiliary_loss=True,  # Enable auxiliary decoding losses for training
         **detr_kwargs,
     )
 
@@ -52,10 +51,12 @@ def create_model(
             param.requires_grad = False
 
     # Get image processor - use base deformable-detr processor
+    # For ViT backbones, we need exact square inputs
     image_processor = AutoImageProcessor.from_pretrained(
         "SenseTime/deformable-detr",
         do_resize=True,
-        size={"shortest_edge": image_size, "longest_edge": image_size * 2},
+        do_pad=True,
+        size={"height": image_size, "width": image_size},
     )
 
     return model, image_processor
