@@ -43,6 +43,48 @@ class DetrConfig(BaseModel):
     model_config = {"extra": "allow"}  # Allow additional DETR config params
 
 
+class DFineConfig(BaseModel):
+    """D-FINE architecture configuration."""
+
+    # Backbone config
+    encoder_in_channels: list[int] = Field(
+        default=[384, 768, 1536], description="Backbone output channels for each level"
+    )
+    feat_strides: list[int] = Field(default=[8, 16, 32], description="Feature strides")
+    num_feature_levels: int = Field(default=3, gt=0, description="Number of feature levels")
+    backbone_kwargs: dict = Field(
+        default_factory=lambda: {"out_indices": (1, 2, 3)},
+        description="Backbone keyword arguments",
+    )
+
+    # Encoder config
+    encoder_hidden_dim: int = Field(default=256, gt=0, description="Encoder hidden dimension")
+    encoder_layers: int = Field(default=1, gt=0, description="Number of encoder layers")
+    encoder_ffn_dim: int = Field(default=1024, gt=0, description="Encoder FFN dimension")
+    encoder_attention_heads: int = Field(default=8, gt=0, description="Encoder attention heads")
+
+    # Decoder config
+    d_model: int = Field(default=256, gt=0, description="Decoder model dimension")
+    num_queries: int = Field(default=300, gt=0, description="Number of object queries")
+    decoder_layers: int = Field(default=6, gt=0, description="Number of decoder layers")
+    decoder_ffn_dim: int = Field(default=1024, gt=0, description="Decoder FFN dimension")
+    decoder_attention_heads: int = Field(default=8, gt=0, description="Decoder attention heads")
+    decoder_n_points: int = Field(default=4, gt=0, description="Deformable attention points")
+
+    # Loss weights
+    weight_loss_vfl: float = Field(default=1.0, ge=0, description="VFL loss weight")
+    weight_loss_bbox: float = Field(default=5.0, ge=0, description="BBox L1 loss weight")
+    weight_loss_giou: float = Field(default=2.0, ge=0, description="GIoU loss weight")
+    weight_loss_fgl: float = Field(default=0.15, ge=0, description="FGL loss weight")
+    weight_loss_ddf: float = Field(default=1.5, ge=0, description="DDF loss weight")
+
+    # Training config
+    num_denoising: int = Field(default=100, ge=0, description="Number of denoising queries")
+    auxiliary_loss: bool = Field(default=True, description="Use auxiliary decoding losses")
+
+    model_config = {"extra": "allow"}  # Allow additional D-FINE config params
+
+
 class DataConfig(BaseModel):
     """Data configuration."""
 
@@ -114,10 +156,10 @@ class OutputConfig(BaseModel):
 
 
 class TrainConfig(BaseModel):
-    """Complete training configuration."""
+    """Complete training configuration (D-FINE architecture)."""
 
     model: ModelConfig
-    detr: DetrConfig
+    dfine: DFineConfig
     data: DataConfig
     augmentation: AugmentationConfig | None = None
     training: TrainingConfig

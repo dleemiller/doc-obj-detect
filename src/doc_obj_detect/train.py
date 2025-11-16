@@ -49,7 +49,7 @@ def train(config_path: str) -> None:
     # Create model
     print("\nInitializing model...")
     model_config = config.model
-    detr_config = config.detr.model_dump()
+    dfine_config = config.dfine.model_dump()
 
     model, image_processor = create_model(
         backbone=model_config.backbone,
@@ -57,7 +57,7 @@ def train(config_path: str) -> None:
         use_pretrained_backbone=model_config.use_pretrained_backbone,
         freeze_backbone=model_config.freeze_backbone,
         image_size=config.data.image_size,
-        **detr_config,
+        **dfine_config,
     )
 
     # Print model info
@@ -127,9 +127,11 @@ def train(config_path: str) -> None:
 
     # Setup callbacks
     callbacks = []
-    callbacks.append(
-        UnfreezeBackboneCallback(unfreeze_at_step=training_config_dict["warmup_steps"])
-    )
+    # Only add unfreeze callback if backbone starts frozen
+    if model_config.freeze_backbone:
+        callbacks.append(
+            UnfreezeBackboneCallback(unfreeze_at_step=training_config_dict["warmup_steps"])
+        )
     if early_stopping_patience is not None:
         callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
 

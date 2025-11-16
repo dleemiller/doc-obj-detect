@@ -1,34 +1,52 @@
-# Pretraining configuration for PubLayNet dataset
+# D-FINE Pretraining configuration for PubLayNet dataset
+# ConvNeXt-Large-DINOv3 backbone + D-FINE detector head
 
 model:
-  backbone: "timm/vit_pe_spatial_gigantic_patch14_448.fb"  # ViT-Gigantic (1.8B params) for maximum quality
+  backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (196M params)
   num_classes: 5  # PubLayNet: text, title, list, table, figure
   use_pretrained_backbone: true
-  freeze_backbone: true
+  freeze_backbone: false  # Train end-to-end from start with split LR
 
-detr:
-  # Deformable DETR architecture parameters
-  num_queries: 300  # Number of object queries
-  encoder_layers: 6
-  decoder_layers: 6
+dfine:
+  # Backbone feature extraction (ConvNeXt stages 1, 2, 3)
+  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-L channel dimensions
+  feat_strides: [8, 16, 32]  # Feature pyramid strides
+  num_feature_levels: 3  # Multi-scale levels
+  backbone_kwargs:
+    out_indices: [1, 2, 3]  # Extract from stages 1, 2, 3
+
+  # Encoder configuration
+  encoder_hidden_dim: 256
+  encoder_layers: 1
+  encoder_ffn_dim: 1024
   encoder_attention_heads: 8
+
+  # Decoder configuration
+  d_model: 256
+  num_queries: 300  # Number of object queries
+  decoder_layers: 6
+  decoder_ffn_dim: 1024
   decoder_attention_heads: 8
-  encoder_ffn_dim: 2048
-  decoder_ffn_dim: 2048
-  dropout: 0.1
-  activation_function: "relu"
-  auxiliary_loss: true
-  num_feature_levels: 4  # Multi-scale deformable attention
   decoder_n_points: 4
-  encoder_n_points: 4
+
+  # D-FINE specific losses (FDR + GO-LSD)
+  weight_loss_vfl: 1.0  # Varifocal loss
+  weight_loss_bbox: 5.0  # L1 bbox loss
+  weight_loss_giou: 2.0  # GIoU loss
+  weight_loss_fgl: 0.15  # Fine-grained localization
+  weight_loss_ddf: 1.5  # Distribution distillation
+
+  # Training features
+  num_denoising: 100  # Denoising queries for training stability
+  auxiliary_loss: true  # Deep supervision
 
 data:
   dataset: "publaynet"
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
-  image_size: 448  # ViT-Gigantic expects 448x448 inputs
-  batch_size: 64  # Tested to fit in 96GB VRAM (~65-70GB peak)
-  num_workers: 4  # Reduced from 8 to avoid "too many open files" error
+  image_size: 512  # Standard document detection size
+  batch_size: 40  # Tested: max=56, using 40 for stability (82.46 GB peak)
+  num_workers: 4  # Reduced to avoid "too many open files"
 
 augmentation:
   horizontal_flip: 0.5
@@ -37,14 +55,30 @@ augmentation:
   noise_std: 0.01
 
 training:
-  # TrainingArguments parameters - passed as **kwargs
-  num_train_epochs: 12  # PubLayNet standard: 6-12 epochs with pretrained backbones
-  learning_rate: 5.0e-5
-  weight_decay: 1.0e-4
-  warmup_steps: 2000
+  # Training schedule (24 epochs for PubLayNet with pretrained backbone)
+  num_train_epochs: 24
+
+  # Learning rates (split LR: backbone 1/10 of head)
+  # Base LR scaled for batch size 64
+  # lr_head = 2e-4 * (64/16) = 8e-4
+  # lr_backbone = 8e-4 * 0.1 = 8e-5
+  learning_rate: 8.0e-4  # Head LR (backbone will be 1/10)
+
+  # Optimizer settings
+  weight_decay: 0.05  # AdamW weight decay
+
+  # Warmup and scheduling
+  warmup_steps: 1000  # Linear warmup (5% of ~20k total steps)
+
+  # Gradient settings
   gradient_accumulation_steps: 1
+  max_grad_norm: 0.5  # Gradient clipping for stability
+
+  # Mixed precision
   bf16: true
-  save_steps: 500  # Save more frequently with fewer total steps
+
+  # Checkpointing and evaluation
+  save_steps: 500
   eval_steps: 500
   logging_steps: 10
   eval_strategy: "steps"
@@ -54,10 +88,8 @@ training:
   metric_for_best_model: "eval_loss"
   greater_is_better: false
   push_to_hub: false
-  # Early stopping to prevent overtraining
-  early_stopping_patience: 5  # Stop if no improvement for 5 eval cycles (2500 steps)
 
 output:
-  output_dir: "outputs/pretrain_publaynet"
-  checkpoint_dir: "outputs/pretrain_publaynet/checkpoints"
-  log_dir: "outputs/pretrain_publaynet/logs"
+  output_dir: "outputs/pretrain_publaynet_dfine"
+  checkpoint_dir: "outputs/pretrain_publaynet_dfine/checkpoints"
+  log_dir: "outputs/pretrain_publaynet_dfine/logs"
