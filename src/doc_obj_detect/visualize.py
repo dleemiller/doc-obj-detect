@@ -8,7 +8,7 @@ import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 from datasets import load_dataset
 
-from doc_obj_detect.data import apply_augmentations
+from doc_obj_detect.data import apply_augmentations, get_augmentation_transform
 
 
 def visualize_augmentations(num_samples: int = 4, output_dir: str | None = None) -> None:
@@ -79,26 +79,36 @@ def visualize_augmentations(num_samples: int = 4, output_dir: str | None = None)
                 bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 1},
             )
 
-        # Apply augmentations
-        augmented = apply_augmentations(
-            image=image,
-            annotations=annotations,
-            horizontal_flip=aug_config["horizontal_flip"],
-            rotate_limit=aug_config["rotate_limit"],
-            brightness_contrast=aug_config["brightness_contrast"],
-            noise_std=aug_config["noise_std"],
+        # Create transform and apply augmentations
+        transform = get_augmentation_transform(aug_config)
+        # Convert dataset annotations format to list of dicts
+        annotations_list = [
+            {
+                "bbox": bbox,
+                "category_id": cat_id,
+                "area": bbox[2] * bbox[3],  # width * height
+                "iscrowd": 0,
+            }
+            for bbox, cat_id in zip(annotations["bbox"], annotations["category_id"], strict=False)
+        ]
+        # apply_augmentations expects batched data (lists), so wrap single items
+        augmented_batch = apply_augmentations(
+            examples={"image": [image], "annotations": [annotations_list]},
+            transform=transform,
         )
+        # Extract single result from batch
+        augmented_image = augmented_batch["image"][0]
+        augmented_annotations = augmented_batch["annotations"][0]
 
         # Augmented image
-        ax2.imshow(augmented["image"])
+        ax2.imshow(augmented_image)
         ax2.set_title("Augmented", fontsize=14, fontweight="bold")
         ax2.axis("off")
 
         # Draw bounding boxes on augmented
-        aug_annotations = augmented["annotations"]
-        for bbox, cat_id in zip(
-            aug_annotations["bbox"], aug_annotations["category_id"], strict=False
-        ):
+        for ann in augmented_annotations:
+            bbox = ann["bbox"]
+            cat_id = ann["category_id"]
             x, y, w, h = bbox
             cat_id_mapped = cat_id - 1 if cat_id > 0 else cat_id
             label = class_labels.get(cat_id_mapped, f"class_{cat_id_mapped}")
