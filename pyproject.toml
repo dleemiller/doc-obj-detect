@@ -17,6 +17,7 @@ dependencies = [
     "numpy>=2.0.0",
     "tqdm>=4.66.0",
     "pydantic>=2.0.0",
+    "accelerate>=0.26.0",
 ]
 
 [project.optional-dependencies]

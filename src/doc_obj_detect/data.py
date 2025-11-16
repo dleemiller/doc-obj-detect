@@ -9,12 +9,23 @@ from datasets import load_dataset
 from transformers import AutoImageProcessor
 
 # Dataset class labels
+# PubLayNet original IDs: 1=text, 2=title, 3=list, 4=table, 5=figure
+# We remap to 0-indexed for the model
 PUBLAYNET_CLASSES = {
     0: "text",
     1: "title",
     2: "list",
     3: "table",
     4: "figure",
+}
+
+# Mapping from PubLayNet dataset IDs to model IDs (0-indexed)
+PUBLAYNET_ID_MAPPING = {
+    1: 0,  # text
+    2: 1,  # title
+    3: 2,  # list
+    4: 3,  # table
+    5: 4,  # figure
 }
 
 DOCLAYNET_CLASSES = {
@@ -274,10 +285,34 @@ def prepare_dataset_for_training(
     def preprocess_batch(examples):
         """Preprocess batch with image processor."""
         images = [img.convert("RGB") for img in examples["image"]]
-        annotations = [
-            format_annotations_for_detr(img_id, anns)
-            for img_id, anns in zip(examples["image_id"], examples["annotations"], strict=False)
-        ]
+
+        # Format annotations for DETR - convert from dataset format to COCO format
+        # Dataset provides annotations as dict of lists, need list of dicts
+        annotations = []
+        for img_id, anns_dict in zip(examples["image_id"], examples["annotations"], strict=False):
+            # Convert dict of lists to list of dicts
+            num_objects = len(anns_dict["bbox"])
+            anns_list = []
+            for i in range(num_objects):
+                # Remap category IDs from dataset format to 0-indexed model format
+                dataset_cat_id = anns_dict["category_id"][i]
+                model_cat_id = PUBLAYNET_ID_MAPPING.get(dataset_cat_id, dataset_cat_id - 1)
+
+                anns_list.append(
+                    {
+                        "bbox": anns_dict["bbox"][i],
+                        "category_id": model_cat_id,
+                        "area": anns_dict["area"][i],
+                        "iscrowd": anns_dict["iscrowd"][i],
+                    }
+                )
+
+            annotations.append(
+                {
+                    "image_id": img_id,
+                    "annotations": anns_list,
+                }
+            )
 
         # Process with HuggingFace processor
         encoding = image_processor(
@@ -285,7 +320,17 @@ def prepare_dataset_for_training(
             annotations=annotations,
             return_tensors="pt",
         )
-        return encoding
+
+        # Convert labels to list format for batching
+        labels = []
+        for target in encoding["labels"]:
+            labels.append(target)
+
+        return {
+            "pixel_values": encoding["pixel_values"],
+            "pixel_mask": encoding["pixel_mask"],
+            "labels": labels,
+        }
 
     # Apply preprocessing
     dataset = dataset.with_transform(preprocess_batch)

@@ -22,7 +22,7 @@ detr:
 data:
   dataset: "publaynet"
   train_split: "train"
-  val_split: "val"
+  val_split: "validation"  # PubLayNet uses 'validation' not 'val'
   image_size: 512
   batch_size: 8  # Adjust based on 96GB VRAM
   num_workers: 8
