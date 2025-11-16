@@ -28,7 +28,7 @@ data:
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
   image_size: 448  # ViT-Gigantic expects 448x448 inputs
   batch_size: 64  # Tested to fit in 96GB VRAM (~65-70GB peak)
-  num_workers: 8
+  num_workers: 4  # Reduced from 8 to avoid "too many open files" error
 
 augmentation:
   horizontal_flip: 0.5
