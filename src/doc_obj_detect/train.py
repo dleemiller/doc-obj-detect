@@ -108,6 +108,24 @@ def train(config_path: str) -> None:
     output_dir = Path(output_config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Generate unique run name for TensorBoard
+    if output_config.run_name:
+        run_name = output_config.run_name
+    else:
+        # Use timestamp if no run_name provided
+        from datetime import datetime
+
+        run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Create unique logging directory for this run
+    if output_config.log_dir:
+        log_dir = str(Path(output_config.log_dir) / run_name)
+    else:
+        log_dir = str(output_dir / "logs" / run_name)
+
+    print(f"TensorBoard run name: {run_name}")
+    print(f"Logs will be saved to: {log_dir}")
+
     # Extract early_stopping_patience from training config (not a TrainingArguments param)
     training_config_dict = config.training.model_dump()
     early_stopping_patience = training_config_dict.pop("early_stopping_patience", None)
@@ -117,7 +135,8 @@ def train(config_path: str) -> None:
     # to avoid "too many open files" when train/eval dataloaders run concurrently
     training_args = TrainingArguments(
         output_dir=str(output_dir),
-        logging_dir=output_config.log_dir,
+        run_name=run_name,  # Unique run name for TensorBoard
+        logging_dir=log_dir,
         report_to=["tensorboard"],  # Use TensorBoard for monitoring
         remove_unused_columns=False,  # Keep all columns for custom collate
         dataloader_num_workers=data_config.num_workers,

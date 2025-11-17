@@ -154,6 +154,11 @@ class OutputConfig(BaseModel):
     output_dir: str = Field(description="Output directory for training artifacts")
     checkpoint_dir: str | None = Field(default=None, description="Checkpoint directory")
     log_dir: str | None = Field(default=None, description="TensorBoard log directory")
+    run_name: str | None = Field(
+        default=None,
+        description="Unique run name for TensorBoard (creates subdirectory in log_dir). "
+        "If None, uses timestamp.",
+    )
 
 
 class TrainConfig(BaseModel):

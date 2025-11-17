@@ -107,3 +107,4 @@ output:
   output_dir: "outputs/pretrain_publaynet_dfine"
   checkpoint_dir: "outputs/pretrain_publaynet_dfine/checkpoints"
   log_dir: "outputs/pretrain_publaynet_dfine/logs"
+  run_name: "multiscale_lr1e4_bs32_12ep"  # Unique name for TensorBoard (or use timestamp if null)
