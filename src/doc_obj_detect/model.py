@@ -56,11 +56,13 @@ def create_model(
 
     # Get image processor
     # D-FINE uses standard DETR-style preprocessing
+    # Note: do_resize=False because Albumentations handles resizing (including multi-scale)
+    # The augmentation pipeline resizes images, so image_processor only normalizes/pads
     image_processor = AutoImageProcessor.from_pretrained(
         "SenseTime/deformable-detr",  # Use as base
-        do_resize=True,
-        do_pad=True,
-        size={"height": image_size, "width": image_size},
+        do_resize=False,  # Albumentations handles resize (including multi-scale training)
+        do_pad=True,  # Pad to make batch-compatible
+        size={"height": image_size, "width": image_size},  # Used for padding reference
     )
 
     return model, image_processor

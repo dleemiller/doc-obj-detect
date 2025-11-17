@@ -96,6 +96,7 @@ class DataConfig(BaseModel):
     batch_size: int = Field(default=8, gt=0, description="Batch size per device")
     num_workers: int = Field(default=4, ge=0, description="Number of data loader workers")
     cache_dir: str | None = Field(default=None, description="Dataset cache directory")
+    max_eval_samples: int = Field(default=2000, ge=0)
 
     @field_validator("dataset")
     @classmethod

@@ -86,13 +86,15 @@ def compute_map(
     image_processor,
     id2label: Mapping[int, str] | None = None,
     threshold: float = 0.0,
-    max_eval_images: int | None = 2000,
+    max_eval_images: int | None = 200,  # cap for metric compute to avoid OOM
 ) -> dict[str, float]:
     """
-    Compute COCO-style mAP/mAR with torchmetrics, in a memory-aware way.
+    Compute COCO-style mAP/mAR with torchmetrics on CPU.
 
-    - Uses HF's object detection recipe.
-    - Optionally caps number of images used for metrics to avoid OOM.
+    - Caps the number of images via `max_eval_images` for speed/memory.
+    - Uses HF's post_process_object_detection for prediction decoding.
+    - Uses YOLO -> Pascal VOC conversion for targets.
+    - Runs MeanAveragePrecision on CPU with class_metrics=False for speed.
     """
     predictions, targets = eval_pred.predictions, eval_pred.label_ids
 
@@ -103,61 +105,65 @@ def compute_map(
         max_images=max_eval_images,
     )
 
-    image_sizes: list[torch.Tensor] = []
-    processed_targets: list[dict[str, torch.Tensor]] = []
-    processed_predictions: list[dict[str, torch.Tensor]] = []
+    # First, process all predictions and targets on CPU
+    processed_targets_cpu: list[dict[str, torch.Tensor]] = []
+    processed_predictions_cpu: list[dict[str, torch.Tensor]] = []
 
-    # --- targets: YOLO -> Pascal VOC on CPU ---
-    for batch in targets:
-        # batch is list[dict], each dict has "orig_size", "boxes", "class_labels"
-        batch_image_sizes = torch.tensor(
-            np.array([t["orig_size"] for t in batch]),
-            dtype=torch.int64,
-        )
-        image_sizes.append(batch_image_sizes)
-
-        for t in batch:
-            boxes = torch.tensor(t["boxes"], dtype=torch.float32)
-            boxes = convert_bbox_yolo_to_pascal(boxes, t["orig_size"])
-            labels = torch.tensor(t["class_labels"], dtype=torch.int64)
-            processed_targets.append({"boxes": boxes, "labels": labels})
-
-    # --- predictions: model YOLO boxes -> Pascal VOC via image_processor ---
-    for batch_pred, target_sizes in zip(predictions, image_sizes, strict=False):
-        # HF Deformable DETR: predictions per batch are (loss, logits, boxes) or (logits, boxes)
+    for batch_pred, batch_tgt in zip(predictions, targets, strict=False):
+        # Extract prediction tensors
         if len(batch_pred) == 3:
             _, batch_logits, batch_boxes = batch_pred
         else:
             batch_logits, batch_boxes = batch_pred
 
-        output = ModelOutput(
-            logits=torch.tensor(batch_logits),  # keep on CPU
-            pred_boxes=torch.tensor(batch_boxes),
+        # Convert to torch tensors once
+        logits_tensor = (
+            batch_logits
+            if isinstance(batch_logits, torch.Tensor)
+            else torch.from_numpy(batch_logits)
+        )
+        boxes_tensor = (
+            batch_boxes if isinstance(batch_boxes, torch.Tensor) else torch.from_numpy(batch_boxes)
         )
 
+        # Batch image sizes for post-processing
+        target_sizes = torch.tensor(
+            np.array([t["orig_size"] for t in batch_tgt]),
+            dtype=torch.int64,
+        )
+
+        # Post-process predictions (CPU)
+        output = ModelOutput(logits=logits_tensor, pred_boxes=boxes_tensor)
         post = image_processor.post_process_object_detection(
             output,
             threshold=threshold,
             target_sizes=target_sizes,
         )
-        processed_predictions.extend(post)
+        processed_predictions_cpu.extend(post)
 
+        # Process targets (YOLO → Pascal VOC) on CPU
+        for t in batch_tgt:
+            boxes = torch.as_tensor(t["boxes"], dtype=torch.float32)
+            boxes = convert_bbox_yolo_to_pascal(boxes, t["orig_size"])
+            labels = torch.as_tensor(t["class_labels"], dtype=torch.int64)
+            processed_targets_cpu.append({"boxes": boxes, "labels": labels})
+
+    # Metric on CPU, no per-class metrics for speed
     metric = MeanAveragePrecision(
         box_format="xyxy",
-        class_metrics=True,
+        class_metrics=False,
     )
-    metric.update(processed_predictions, processed_targets)
+
+    # Single update with all images (capped by max_eval_images)
+    metric.update(processed_predictions_cpu, processed_targets_cpu)
+
+    # Compute final metrics
     metrics = metric.compute()
 
-    # per-class expansion
-    classes = metrics.pop("classes")
-    map_per_class = metrics.pop("map_per_class")
-    mar_100_per_class = metrics.pop("mar_100_per_class")
+    # Drop non-scalar fields we don't need (present even when class_metrics=False)
+    metrics.pop("classes", None)
+    metrics.pop("map_per_class", None)
+    metrics.pop("mar_100_per_class", None)
 
-    for cls_id, cls_map, cls_mar in zip(classes, map_per_class, mar_100_per_class, strict=False):
-        name = id2label[cls_id.item()] if id2label is not None else cls_id.item()
-        metrics[f"map_{name}"] = cls_map
-        metrics[f"mar_100_{name}"] = cls_mar
-
-    # tensor -> float
+    # tensor -> float (all tensors should now be 0-dim scalars)
     return {k: float(v.item()) for k, v in metrics.items()}

@@ -45,34 +45,48 @@ data:
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
   image_size: 512  # Standard document detection size
-  batch_size: 40  # Tested: max=56, using 40 for stability (82.46 GB peak)
+  batch_size: 32  # Match D-FINE defaults and SOTA paper (16-32 range)
+  max_eval_samples: 1000
   num_workers: 4  # Reduced to avoid "too many open files"
 
 augmentation:
-  horizontal_flip: 0.5
-  rotate_limit: 5  # Small rotations to preserve text readability
-  brightness_contrast: 0.2
-  noise_std: 0.01
+  # Multi-scale training for better scale invariance and small object detection
+  # Range includes eval size (640) to avoid extrapolation
+  multi_scale_sizes: [448, 512, 576, 640]
+
+  # Document-specific augmentations (all implemented in data.py pipeline)
+  # Perspective distortion: p=0.3, scale=(0.02, 0.05)
+  # Elastic transform: p=0.2, alpha=30, sigma=5
+  rotate_limit: 5  # Small rotations (p=0.5) to preserve text readability
+  brightness_contrast: 0.2  # RandomBrightnessContrast (p=0.5)
+  # Blur: OneOf[MotionBlur, GaussianBlur] (p=0.3, blur_limit=3)
+  # JPEG compression: p=0.3, quality_range=(75, 100)
+  noise_std: 0.01  # GaussNoise (p=0.2)
 
 training:
-  # Training schedule (24 epochs for PubLayNet with pretrained backbone)
-  num_train_epochs: 24
+  # Training schedule: 12 epochs to match SOTA paper
+  # Cosine LR provides natural "precision tail" for final mAP gains
+  num_train_epochs: 12
 
   # Learning rates (split LR: backbone 1/10 of head)
-  # Base LR scaled for batch size 64
-  # lr_head = 2e-4 * (64/16) = 8e-4
-  # lr_backbone = 8e-4 * 0.1 = 8e-5
-  learning_rate: 8.0e-4  # Head LR (backbone will be 1/10)
+  # Reduced from 2e-4 to address high gradient norms (89-175)
+  # Lower LR should reduce gradient magnitudes and improve stability
+  # lr_head = 1e-4
+  # lr_backbone = 1e-4 * 0.1 = 1e-5
+  learning_rate: 1.0e-4  # Head LR (backbone will be 1/10)
 
   # Optimizer settings
   weight_decay: 0.05  # AdamW weight decay
 
   # Warmup and scheduling
-  warmup_steps: 1000  # Linear warmup (5% of ~20k total steps)
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1  # 10% of total training (was 5000 steps, too long for rapid convergence)
+  lr_scheduler_kwargs:
+    eta_min: 1.0e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
 
   # Gradient settings
   gradient_accumulation_steps: 1
-  max_grad_norm: 0.5  # Gradient clipping for stability
+  max_grad_norm: 1.0  # Gradient clipping (relaxed from 0.5 based on observed norms of 89-175)
 
   # Mixed precision
   bf16: true
@@ -80,7 +94,7 @@ training:
   # Checkpointing and evaluation
   save_steps: 500
   eval_steps: 500
-  logging_steps: 10
+  logging_steps: 5
   eval_strategy: "steps"
   save_strategy: "steps"
   save_total_limit: 3

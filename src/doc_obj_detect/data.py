@@ -43,10 +43,11 @@ DOCLAYNET_CLASSES = {
 }
 
 
-def get_augmentation_transform(config: dict) -> A.Compose:
+def get_augmentation_transform(config: dict, batch_scale: int | None = None) -> A.Compose:
     """Create document-specific augmentation pipeline.
 
     Augmentations simulate realistic document capture conditions:
+    - Multi-scale training: resize to specified scale (same per batch)
     - Perspective transforms: camera angles and scanning perspectives
     - Elastic transforms: paper warping and book spine curvature
     - Blur: poor quality scans or camera shake
@@ -55,14 +56,35 @@ def get_augmentation_transform(config: dict) -> A.Compose:
 
     Args:
         config: Augmentation configuration dict with keys:
+            - multi_scale_sizes: list of image sizes for multi-scale training (default: [512])
             - rotate_limit: rotation angle limit in degrees (default: 5)
             - brightness_contrast: brightness/contrast variation limit (default: 0.2)
             - noise_std: gaussian noise standard deviation (default: 0.01)
+        batch_scale: If provided, use this scale instead of choosing randomly
+                    (required for multi-scale to work with batching)
 
     Returns:
         Albumentations composition with bbox transforms
     """
-    return A.Compose(
+    # Multi-scale training: resize to batch_scale (chosen once per batch)
+    # All images in a batch must have the same size for torch.stack()
+    multi_scale_sizes = config.get("multi_scale_sizes", [512])
+
+    if batch_scale is not None:
+        # Use provided batch scale
+        resize_size = batch_scale
+    elif len(multi_scale_sizes) == 1:
+        # Single scale
+        resize_size = multi_scale_sizes[0]
+    else:
+        # Should not happen - batch_scale should always be provided for multi-scale
+        # Fall back to first size
+        resize_size = multi_scale_sizes[0]
+
+    transforms = [A.Resize(resize_size, resize_size, p=1.0)]
+
+    # Add remaining augmentations
+    transforms.extend(
         [
             # Perspective distortion from camera angles or scanning
             A.Perspective(scale=(0.02, 0.05), p=0.3),
@@ -99,7 +121,11 @@ def get_augmentation_transform(config: dict) -> A.Compose:
                 std_range=(0.0, config.get("noise_std", 0.01)),
                 p=0.2,
             ),
-        ],
+        ]
+    )
+
+    return A.Compose(
+        transforms,
         bbox_params=A.BboxParams(
             format="coco",
             label_fields=["category_ids"],
@@ -129,17 +155,32 @@ def format_annotations_for_detr(
 
 def apply_augmentations(
     examples: dict,
-    transform: A.Compose,
+    config: dict,
 ) -> dict:
     """Apply augmentations to a batch of examples.
 
+    For multi-scale training, chooses one scale randomly per batch
+    to ensure all images in the batch have the same size (required for torch.stack).
+
     Args:
         examples: Batch dict with 'image' and 'annotations' keys
-        transform: Albumentations transform pipeline
+        config: Augmentation config dict (includes multi_scale_sizes)
 
     Returns:
         Augmented batch with same structure
     """
+    import random
+
+    # Choose scale once per batch for multi-scale training
+    multi_scale_sizes = config.get("multi_scale_sizes", [512])
+    if len(multi_scale_sizes) > 1:
+        batch_scale = random.choice(multi_scale_sizes)
+    else:
+        batch_scale = multi_scale_sizes[0]
+
+    # Create transform with chosen batch scale
+    transform = get_augmentation_transform(config, batch_scale=batch_scale)
+
     images = []
     annotations = []
 
@@ -250,6 +291,7 @@ def prepare_dataset_for_training(
     image_processor: AutoImageProcessor,
     augmentation_config: dict | None = None,
     cache_dir: str | None = None,
+    max_samples: int | None = None,
 ) -> tuple:
     """Prepare dataset for training with preprocessing and augmentation.
 
@@ -257,8 +299,9 @@ def prepare_dataset_for_training(
         dataset_name: 'publaynet' or 'doclaynet'
         split: Dataset split to load
         image_processor: HuggingFace image processor for DETR
-        augmentation_config: Optional augmentation configuration
+        augmentation_config: Optional augmentation configuration (only used for 'train')
         cache_dir: Optional cache directory
+        max_samples: If set and split != 'train', limit dataset to this many samples.
 
     Returns:
         Tuple of (processed dataset, class labels dict)
@@ -271,17 +314,24 @@ def prepare_dataset_for_training(
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
-    # Apply augmentations if provided
+    # Optional: limit number of samples for non-train splits
+    if max_samples is not None and split != "train":
+        # If you want a random subset instead of the first N, shuffle here:
+        # dataset = dataset.shuffle(seed=42)
+        n = min(max_samples, len(dataset))
+        dataset = dataset.select(range(n))
+
+    # Apply augmentations if provided (train only)
     if augmentation_config and split == "train":
-        transform = get_augmentation_transform(augmentation_config)
-        dataset = dataset.with_transform(lambda examples: apply_augmentations(examples, transform))
+        dataset = dataset.with_transform(
+            lambda examples: apply_augmentations(examples, augmentation_config)
+        )
 
     def preprocess_batch(examples):
         """Preprocess batch with image processor."""
         images = [img.convert("RGB") for img in examples["image"]]
 
         # Format annotations for DETR - convert from dataset format to COCO format
-        # Dataset provides annotations as dict of lists, need list of dicts
         annotations = []
         for img_id, anns_dict in zip(examples["image_id"], examples["annotations"], strict=False):
             # Convert dict of lists to list of dicts
@@ -316,9 +366,7 @@ def prepare_dataset_for_training(
         )
 
         # Convert labels to list format for batching
-        labels = []
-        for target in encoding["labels"]:
-            labels.append(target)
+        labels = list(encoding["labels"])
 
         return {
             "pixel_values": encoding["pixel_values"],
@@ -360,9 +408,14 @@ def visualize_augmentations(
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
-    # Create augmentation transform
-    aug_config = {"rotate_limit": 5, "brightness_contrast": 0.2, "noise_std": 0.01}
-    transform = get_augmentation_transform(aug_config)
+    # Create augmentation transform (use single scale for visualization)
+    aug_config = {
+        "rotate_limit": 5,
+        "brightness_contrast": 0.2,
+        "noise_std": 0.01,
+        "multi_scale_sizes": [512],  # Single scale for vis
+    }
+    transform = get_augmentation_transform(aug_config, batch_scale=512)
 
     print(f"Generating {num_samples} augmentation samples...")
 
