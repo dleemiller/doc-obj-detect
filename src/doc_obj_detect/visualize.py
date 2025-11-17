@@ -1,170 +1,189 @@
-"""Visualization tools for data augmentation and model outputs."""
+"""Visualization utilities for document augmentations."""
 
 import argparse
-import random
 from pathlib import Path
 
-import matplotlib.patches as patches
-import matplotlib.pyplot as plt
-from datasets import load_dataset
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
-from doc_obj_detect.data import apply_augmentations, get_augmentation_transform
+from doc_obj_detect.config import AugmentationConfig
+from doc_obj_detect.data import (
+    get_augmentation_transform,
+    load_doclaynet,
+    load_publaynet,
+)
+
+_COLORS = [
+    "#FF6B6B",
+    "#4ECDC4",
+    "#45B7D1",
+    "#FFA07A",
+    "#98D8C8",
+    "#F7DC6F",
+    "#BB8FCE",
+    "#85C1E2",
+    "#F8B739",
+    "#52B788",
+    "#F06292",
+]
 
 
-def visualize_augmentations(num_samples: int = 4, output_dir: str | None = None) -> None:
-    """Visualize augmentation effects on sample images.
+def visualize_augmentations(
+    dataset_name: str,
+    num_samples: int = 4,
+    output_dir: str = "outputs/augmentation_samples",
+    cache_dir: str | None = None,
+) -> None:
+    """Generate side-by-side original vs augmented document samples."""
 
-    Args:
-        num_samples: Number of samples to visualize
-        output_dir: Directory to save visualizations (if None, displays interactively)
-    """
-    print("Loading PubLayNet dataset...")
-    dataset = load_dataset("shunk031/PubLayNet", split="train", streaming=True)
+    dataset_name = dataset_name.lower()
+    if dataset_name == "publaynet":
+        dataset, class_labels = load_publaynet("val", cache_dir)
+    elif dataset_name == "doclaynet":
+        dataset, class_labels = load_doclaynet("val", cache_dir)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
 
-    # Get random samples
-    samples = []
-    for i, example in enumerate(dataset):
-        if i >= num_samples * 10:  # Get more to choose from
-            break
-        samples.append(example)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    # Randomly select num_samples
-    selected = random.sample(samples, min(num_samples, len(samples)))
+    # Single-scale transform for clarity
+    aug_config = AugmentationConfig(multi_scale_sizes=[512]).model_dump()
+    transform = get_augmentation_transform(aug_config, batch_scale=512)
 
-    # Class labels
-    class_labels = {0: "text", 1: "title", 2: "list", 3: "table", 4: "figure"}
+    print(f"Generating {num_samples} augmentation samples...")
+    for idx in range(num_samples):
+        sample = dataset[idx]
+        image = sample["image"]
+        annotations = sample["annotations"]
 
-    # Augmentation config (document-appropriate)
-    aug_config = {
-        "horizontal_flip": 0.5,
-        "rotate_limit": 5,
-        "brightness_contrast": 0.2,
-        "noise_std": 0.01,
-    }
+        image_np = np.array(image.convert("RGB"))
+        bboxes = [ann["bbox"] for ann in annotations]
+        category_ids = [ann["category_id"] for ann in annotations]
 
-    for idx, example in enumerate(selected):
-        # Create figure with 2 subplots (original and augmented)
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
-
-        image = example["image"]
-        annotations = example["annotations"]
-
-        # Original image
-        ax1.imshow(image)
-        ax1.set_title("Original", fontsize=14, fontweight="bold")
-        ax1.axis("off")
-
-        # Draw bounding boxes on original
-        for bbox, cat_id in zip(annotations["bbox"], annotations["category_id"], strict=False):
-            x, y, w, h = bbox
-            # Remap category IDs (1-indexed to 0-indexed)
-            cat_id_mapped = cat_id - 1 if cat_id > 0 else cat_id
-            label = class_labels.get(cat_id_mapped, f"class_{cat_id_mapped}")
-
-            rect = patches.Rectangle(
-                (x, y),
-                w,
-                h,
-                linewidth=2,
-                edgecolor="red",
-                facecolor="none",
-            )
-            ax1.add_patch(rect)
-            ax1.text(
-                x,
-                y - 5,
-                label,
-                fontsize=8,
-                color="red",
-                bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 1},
-            )
-
-        # Create transform and apply augmentations
-        transform = get_augmentation_transform(aug_config)
-        # Convert dataset annotations format to list of dicts
-        annotations_list = [
-            {
-                "bbox": bbox,
-                "category_id": cat_id,
-                "area": bbox[2] * bbox[3],  # width * height
-                "iscrowd": 0,
-            }
-            for bbox, cat_id in zip(annotations["bbox"], annotations["category_id"], strict=False)
-        ]
-        # apply_augmentations expects batched data (lists), so wrap single items
-        augmented_batch = apply_augmentations(
-            examples={"image": [image], "annotations": [annotations_list]},
-            transform=transform,
+        augmented = transform(
+            image=image_np,
+            bboxes=bboxes,
+            category_ids=category_ids,
         )
-        # Extract single result from batch
-        augmented_image = augmented_batch["image"][0]
-        augmented_annotations = augmented_batch["annotations"][0]
 
-        # Augmented image
-        ax2.imshow(augmented_image)
-        ax2.set_title("Augmented", fontsize=14, fontweight="bold")
-        ax2.axis("off")
+        original_with_boxes = _draw_bboxes(image_np, bboxes, category_ids, class_labels)
+        augmented_with_boxes = _draw_bboxes(
+            augmented["image"],
+            augmented["bboxes"],
+            augmented["category_ids"],
+            class_labels,
+        )
 
-        # Draw bounding boxes on augmented
-        for ann in augmented_annotations:
-            bbox = ann["bbox"]
-            cat_id = ann["category_id"]
-            x, y, w, h = bbox
-            cat_id_mapped = cat_id - 1 if cat_id > 0 else cat_id
-            label = class_labels.get(cat_id_mapped, f"class_{cat_id_mapped}")
+        comparison = _compose_side_by_side(original_with_boxes, augmented_with_boxes)
+        output_file = output_path / f"sample_{idx:02d}.png"
+        comparison.save(output_file)
+        print(f"Saved: {output_file}")
 
-            rect = patches.Rectangle(
-                (x, y),
-                w,
-                h,
-                linewidth=2,
-                edgecolor="lime",
-                facecolor="none",
-            )
-            ax2.add_patch(rect)
-            ax2.text(
-                x,
-                y - 5,
-                label,
-                fontsize=8,
-                color="lime",
-                bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 1},
-            )
+    print(f"\nSamples saved to {output_path}")
 
-        plt.tight_layout()
 
-        if output_dir:
-            output_path = Path(output_dir)
-            output_path.mkdir(parents=True, exist_ok=True)
-            save_path = output_path / f"augmentation_example_{idx + 1}.png"
-            plt.savefig(save_path, dpi=150, bbox_inches="tight")
-            print(f"Saved: {save_path}")
-            plt.close()
-        else:
-            plt.show()
+def _draw_bboxes(
+    image_np: np.ndarray,
+    boxes: list[list[float]],
+    labels: list[int],
+    class_labels: dict[int, str],
+) -> np.ndarray:
+    """Render bounding boxes and labels onto an image."""
+    image_draw = Image.fromarray(image_np)
+    draw = ImageDraw.Draw(image_draw)
+
+    for bbox, label in zip(boxes, labels, strict=False):
+        x, y, w, h = bbox
+        color = _COLORS[int(label) % len(_COLORS)]
+        draw.rectangle([x, y, x + w, y + h], outline=color, width=3)
+
+        label_name = class_labels.get(int(label), str(int(label)))
+        font = _load_font(size=16)
+        text_bbox = draw.textbbox((x, y - 20), label_name, font=font)
+        draw.rectangle(text_bbox, fill=color)
+        draw.text((x, y - 20), label_name, fill="white", font=font)
+
+    return np.array(image_draw)
+
+
+def _compose_side_by_side(
+    original: np.ndarray,
+    augmented: np.ndarray,
+) -> Image.Image:
+    """Create a labeled side-by-side comparison image."""
+    h, w = original.shape[:2]
+    comparison = np.zeros((h, w * 2, 3), dtype=np.uint8)
+    comparison[:, :w] = original
+    comparison[:, w:] = augmented
+
+    comparison_image = Image.fromarray(comparison)
+    draw = ImageDraw.Draw(comparison_image)
+    font = _load_font(size=24)
+    draw.text(
+        (20, 20),
+        "Original",
+        fill="white",
+        font=font,
+        stroke_width=2,
+        stroke_fill="black",
+    )
+    draw.text(
+        (w + 20, 20),
+        "Augmented",
+        fill="white",
+        font=font,
+        stroke_width=2,
+        stroke_fill="black",
+    )
+    return comparison_image
+
+
+def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load a truetype font with fallback to default."""
+    try:
+        return ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            size,
+        )
+    except Exception:
+        return ImageFont.load_default()
 
 
 def main() -> None:
     """CLI entry point for augmentation visualization."""
-    parser = argparse.ArgumentParser(
-        description="Visualize data augmentation effects on document images"
+    parser = argparse.ArgumentParser(description="Visualize document augmentations.")
+    parser.add_argument(
+        "dataset",
+        choices=["publaynet", "doclaynet"],
+        help="Dataset to sample from.",
     )
     parser.add_argument(
         "--num-samples",
         type=int,
         default=4,
-        help="Number of samples to visualize (default: 4)",
+        help="Number of samples to generate.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default=None,
-        help="Directory to save visualizations (default: display interactively)",
+        default="outputs/augmentation_samples",
+        help="Directory to save comparison images.",
     )
-
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Optional cache directory for datasets.",
+    )
     args = parser.parse_args()
 
-    visualize_augmentations(num_samples=args.num_samples, output_dir=args.output_dir)
+    visualize_augmentations(
+        dataset_name=args.dataset,
+        num_samples=args.num_samples,
+        output_dir=args.output_dir,
+        cache_dir=args.cache_dir,
+    )
 
 
 if __name__ == "__main__":

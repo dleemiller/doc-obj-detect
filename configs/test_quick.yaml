@@ -1,58 +1,125 @@
-# Quick test configuration for verifying training pipeline
-# Runs for just 30 steps to validate end-to-end functionality
+# D-FINE Pretraining configuration for PubLayNet dataset
+# ConvNeXt-Large-DINOv3 backbone + D-FINE detector head
 
 model:
-  backbone: "resnet50"  # Faster than ViT for testing
+  backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (196M params)
   num_classes: 5  # PubLayNet: text, title, list, table, figure
-  freeze_backbone: false
-  use_pretrained_backbone: false  # Faster initialization for testing
+  use_pretrained_backbone: true
+  freeze_backbone: false  # Train end-to-end from start with split LR
 
-detr:
-  # Smaller DETR for faster testing
-  num_queries: 100  # Reduced from 300
-  encoder_layers: 2  # Reduced from 6
-  decoder_layers: 2  # Reduced from 6
-  encoder_attention_heads: 4  # Reduced from 8
-  decoder_attention_heads: 4  # Reduced from 8
-  encoder_ffn_dim: 512  # Reduced from 1024
-  decoder_ffn_dim: 512  # Reduced from 1024
-  num_feature_levels: 4
+dfine:
+  # Backbone feature extraction (ConvNeXt stages 1, 2, 3)
+  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-L channel dimensions
+  feat_strides: [8, 16, 32]  # Feature pyramid strides
+  num_feature_levels: 3  # Multi-scale levels
+  backbone_kwargs:
+    out_indices: [1, 2, 3]  # Extract from stages 1, 2, 3
+
+  # Encoder configuration
+  encoder_hidden_dim: 256
+  encoder_layers: 1
+  encoder_ffn_dim: 1024
+  encoder_attention_heads: 8
+
+  # Decoder configuration
+  d_model: 256
+  num_queries: 300  # Number of object queries
+  decoder_layers: 6
+  decoder_ffn_dim: 1024
+  decoder_attention_heads: 8
   decoder_n_points: 4
-  encoder_n_points: 4
+
+  # D-FINE specific losses (FDR + GO-LSD)
+  weight_loss_vfl: 1.0  # Varifocal loss
+  weight_loss_bbox: 5.0  # L1 bbox loss
+  weight_loss_giou: 2.0  # GIoU loss
+  weight_loss_fgl: 0.15  # Fine-grained localization
+  weight_loss_ddf: 1.5  # Distribution distillation
+
+  # Training features
+  num_denoising: 100  # Denoising queries for training stability
+  auxiliary_loss: true  # Deep supervision
 
 data:
   dataset: "publaynet"
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
-  image_size: 512
-  batch_size: 2  # Small batch for testing
-  num_workers: 2
+  image_size: 512  # Standard document detection size
+  batch_size: 20  # Match D-FINE defaults and SOTA paper (16-32 range)
+  max_eval_samples: 1000
+  num_workers: 4  # Reduced to avoid "too many open files"
 
 augmentation:
-  horizontal_flip: 0.5
+  # Multi-scale training for better scale invariance and small object detection
+  multi_scale_sizes: [480, 512, 544, 576, 608, 640]
+  max_long_side: 928
   rotate_limit: 5
-  brightness_contrast: 0.2
-  noise_std: 0.01
+  rotate_prob: 0.5
+  perspective:
+    probability: 0.3
+    scale_min: 0.02
+    scale_max: 0.05
+  elastic:
+    probability: 0.2
+    alpha: 30
+    sigma: 5
+  brightness_contrast:
+    limit: 0.2
+    probability: 0.5
+  blur:
+    probability: 0.3
+    blur_limit: 3
+  compression:
+    probability: 0.3
+    quality_min: 75
+    quality_max: 100
+  noise:
+    probability: 0.2
+    std_min: 0.0
+    std_max: 0.01
 
 training:
-  # TrainingArguments parameters - minimal for testing
-  num_train_epochs: 1  # Just 1 epoch
-  max_steps: 30  # Stop after 30 steps
-  learning_rate: 1.0e-4
-  weight_decay: 1.0e-4
-  warmup_steps: 5  # Minimal warmup
+  # Training schedule: 12 epochs to match SOTA paper
+  # Cosine LR provides natural "precision tail" for final mAP gains
+  num_train_epochs: 12
+
+  # Learning rates (split LR: backbone 1/10 of head)
+  # Reduced from 2e-4 to address high gradient norms (89-175)
+  # Lower LR should reduce gradient magnitudes and improve stability
+  # lr_head = 1e-4
+  # lr_backbone = 1e-4 * 0.1 = 1e-5
+  learning_rate: 1.0e-4  # Head LR (backbone will be 1/10)
+
+  # Optimizer settings
+  weight_decay: 0.05  # AdamW weight decay
+
+  # Warmup and scheduling
+  lr_scheduler_type: "cosine_with_min_lr"
+  warmup_ratio: 0.08  # 8% of total training (was 5000 steps, too long for rapid convergence)
+  lr_scheduler_kwargs:
+    min_lr: 1.0e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
+
+  # Gradient settings
   gradient_accumulation_steps: 1
+  max_grad_norm: 1.0  # Gradient clipping (relaxed from 0.5 based on observed norms of 89-175)
+
+  # Mixed precision
   bf16: true
-  save_steps: 100  # Don't save during test
-  eval_steps: 15  # Eval halfway through
-  logging_steps: 5
+
+  # Checkpointing and evaluation
+  save_steps: 5
+  eval_steps: 5
+  logging_steps: 1
   eval_strategy: "steps"
-  save_strategy: "no"  # Don't save checkpoints
-  load_best_model_at_end: false
+  save_strategy: "steps"
+  save_total_limit: 1
+  load_best_model_at_end: true
   metric_for_best_model: "eval_loss"
   greater_is_better: false
   push_to_hub: false
 
 output:
-  output_dir: "outputs/test_quick"
-  log_dir: "outputs/test_quick/logs"
+  output_dir: "outputs/pretrain_publaynet_dfine"
+  checkpoint_dir: "outputs/pretrain_publaynet_dfine/checkpoints"
+  log_dir: "outputs/pretrain_publaynet_dfine/logs"
+  run_name: "multiscale_lr1e4_bs32_12ep"  # Unique name for TensorBoard (or use timestamp if null)

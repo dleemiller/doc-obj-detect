@@ -1,0 +1,90 @@
+# Quick test config to benchmark evaluation speed with GPU acceleration
+# Based on pretrain_publaynet.yaml but runs only 10 steps before eval
+
+model:
+  backbone: "convnext_large.dinov3_lvd1689m"
+  num_classes: 5
+  use_pretrained_backbone: true
+  freeze_backbone: false
+
+dfine:
+  encoder_in_channels: [384, 768, 1536]
+  feat_strides: [8, 16, 32]
+  num_feature_levels: 3
+  backbone_kwargs:
+    out_indices: [1, 2, 3]
+  encoder_hidden_dim: 256
+  encoder_layers: 1
+  encoder_ffn_dim: 1024
+  encoder_attention_heads: 8
+  d_model: 256
+  num_queries: 300
+  decoder_layers: 6
+  decoder_ffn_dim: 1024
+  decoder_attention_heads: 8
+  decoder_n_points: 4
+  weight_loss_vfl: 1.0
+  weight_loss_bbox: 5.0
+  weight_loss_giou: 2.0
+  weight_loss_fgl: 0.15
+  weight_loss_ddf: 1.5
+  num_denoising: 100
+  auxiliary_loss: true
+
+data:
+  dataset: "publaynet"
+  train_split: "train"
+  val_split: "validation"
+  image_size: 512
+  batch_size: 40
+  num_workers: 4
+
+augmentation:
+  multi_scale_sizes: [480, 512, 544, 576, 608, 640]
+  max_long_side: 928
+  rotate_limit: 5
+  rotate_prob: 0.5
+  perspective:
+    probability: 0.3
+    scale_min: 0.02
+    scale_max: 0.05
+  elastic:
+    probability: 0.2
+    alpha: 30
+    sigma: 5
+  brightness_contrast:
+    limit: 0.2
+    probability: 0.5
+  blur:
+    probability: 0.3
+    blur_limit: 3
+  compression:
+    probability: 0.3
+    quality_min: 75
+    quality_max: 100
+  noise:
+    probability: 0.2
+    std_min: 0.0
+    std_max: 0.01
+
+training:
+  num_train_epochs: 1  # Just 1 epoch for testing
+  learning_rate: 8.0e-4
+  weight_decay: 0.05
+  warmup_ratio: 0.1  # Minimal warmup
+  gradient_accumulation_steps: 1
+  max_grad_norm: 0.5
+  bf16: true
+  save_steps: 10  # Match eval_steps
+  eval_steps: 10  # Evaluate after just 10 steps!
+  logging_steps: 5
+  eval_strategy: "steps"
+  save_strategy: "steps"
+  save_total_limit: 1
+  load_best_model_at_end: false  # Don't need this for test
+  push_to_hub: false
+
+output:
+  output_dir: "outputs/test_eval_speed"
+  checkpoint_dir: "outputs/test_eval_speed/checkpoints"
+  log_dir: "outputs/test_eval_speed/logs"

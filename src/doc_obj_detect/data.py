@@ -1,11 +1,13 @@
 """Data loading, preprocessing, and augmentation for document object detection."""
 
-from pathlib import Path
+import math
+import random
 
 import albumentations as A
 import numpy as np
 import torch
 from datasets import load_dataset
+from PIL import Image
 from transformers import AutoImageProcessor
 
 # Dataset class labels
@@ -48,20 +50,12 @@ def get_augmentation_transform(config: dict, batch_scale: int | None = None) -> 
 
     Augmentations simulate realistic document capture conditions:
     - Multi-scale training: resize to specified scale (same per batch)
-    - Perspective transforms: camera angles and scanning perspectives
-    - Elastic transforms: paper warping and book spine curvature
-    - Blur: poor quality scans or camera shake
-    - Compression: different JPEG quality levels
-    - Lighting: shadows and uneven illumination
+    - Perspective & elastic warps
+    - Rotation, brightness/contrast, noise, blur, compression
 
     Args:
-        config: Augmentation configuration dict with keys:
-            - multi_scale_sizes: list of image sizes for multi-scale training (default: [512])
-            - rotate_limit: rotation angle limit in degrees (default: 5)
-            - brightness_contrast: brightness/contrast variation limit (default: 0.2)
-            - noise_std: gaussian noise standard deviation (default: 0.01)
-        batch_scale: If provided, use this scale instead of choosing randomly
-                    (required for multi-scale to work with batching)
+        config: Augmentation configuration dict.
+        batch_scale: Optional override when multi-scale selection is handled externally.
 
     Returns:
         Albumentations composition with bbox transforms
@@ -81,48 +75,104 @@ def get_augmentation_transform(config: dict, batch_scale: int | None = None) -> 
         # Fall back to first size
         resize_size = multi_scale_sizes[0]
 
-    transforms = [A.Resize(resize_size, resize_size, p=1.0)]
+    force_square = config.get("force_square_resize", False)
+    max_long_side = config.get("max_long_side")
+
+    if force_square:
+        transforms = [A.Resize(resize_size, resize_size, p=1.0)]
+    else:
+        transforms = [
+            A.SmallestMaxSize(max_size=resize_size, p=1.0),
+        ]
+        if max_long_side:
+            transforms.append(A.LongestMaxSize(max_size=max_long_side, p=1.0))
 
     # Add remaining augmentations
-    transforms.extend(
-        [
-            # Perspective distortion from camera angles or scanning
-            A.Perspective(scale=(0.02, 0.05), p=0.3),
-            # Elastic deformation for paper warping and book spine curvature
+    perspective_cfg = (config or {}).get("perspective", {})
+    perspective_prob = perspective_cfg.get("probability", 0.3)
+    if perspective_prob > 0:
+        transforms.append(
+            A.Perspective(
+                scale=(
+                    perspective_cfg.get("scale_min", 0.02),
+                    perspective_cfg.get("scale_max", 0.05),
+                ),
+                p=perspective_prob,
+            )
+        )
+
+    elastic_cfg = (config or {}).get("elastic", {})
+    elastic_prob = elastic_cfg.get("probability", 0.2)
+    if elastic_prob > 0:
+        transforms.append(
             A.ElasticTransform(
-                alpha=30,
-                sigma=5,
-                p=0.2,
-            ),
-            # Slight rotation for skewed documents
+                alpha=elastic_cfg.get("alpha", 30),
+                sigma=elastic_cfg.get("sigma", 5),
+                p=elastic_prob,
+            )
+        )
+
+    rotate_prob = (config or {}).get("rotate_prob", 0.5)
+    if rotate_prob > 0:
+        transforms.append(
             A.Rotate(
-                limit=config.get("rotate_limit", 5),
+                limit=(config or {}).get("rotate_limit", 5),
                 border_mode=0,
-                p=0.5,
-            ),
-            # Lighting variations
+                p=rotate_prob,
+            )
+        )
+
+    brightness_cfg = (config or {}).get("brightness_contrast", {})
+    brightness_prob = brightness_cfg.get("probability", 0.5)
+    if brightness_prob > 0:
+        limit = brightness_cfg.get("limit", 0.2)
+        transforms.append(
             A.RandomBrightnessContrast(
-                brightness_limit=config.get("brightness_contrast", 0.2),
-                contrast_limit=config.get("brightness_contrast", 0.2),
-                p=0.5,
-            ),
-            # Blur from poor scan quality or motion
+                brightness_limit=limit,
+                contrast_limit=limit,
+                p=brightness_prob,
+            )
+        )
+
+    blur_cfg = (config or {}).get("blur", {})
+    blur_prob = blur_cfg.get("probability", 0.3)
+    if blur_prob > 0:
+        blur_limit = blur_cfg.get("blur_limit", 3)
+        transforms.append(
             A.OneOf(
                 [
-                    A.MotionBlur(blur_limit=3, p=1.0),
-                    A.GaussianBlur(blur_limit=3, p=1.0),
+                    A.MotionBlur(blur_limit=blur_limit, p=1.0),
+                    A.GaussianBlur(blur_limit=blur_limit, p=1.0),
                 ],
-                p=0.3,
-            ),
-            # JPEG compression artifacts
-            A.ImageCompression(quality_range=(75, 100), p=0.3),
-            # Scanner noise
+                p=blur_prob,
+            )
+        )
+
+    compression_cfg = (config or {}).get("compression", {})
+    compression_prob = compression_cfg.get("probability", 0.3)
+    if compression_prob > 0:
+        transforms.append(
+            A.ImageCompression(
+                quality_range=(
+                    compression_cfg.get("quality_min", 75),
+                    compression_cfg.get("quality_max", 100),
+                ),
+                p=compression_prob,
+            )
+        )
+
+    noise_cfg = (config or {}).get("noise", {})
+    noise_prob = noise_cfg.get("probability", 0.2)
+    if noise_prob > 0:
+        transforms.append(
             A.GaussNoise(
-                std_range=(0.0, config.get("noise_std", 0.01)),
-                p=0.2,
-            ),
-        ]
-    )
+                std_range=(
+                    noise_cfg.get("std_min", 0.0),
+                    noise_cfg.get("std_max", 0.01),
+                ),
+                p=noise_prob,
+            )
+        )
 
     return A.Compose(
         transforms,
@@ -159,18 +209,14 @@ def apply_augmentations(
 ) -> dict:
     """Apply augmentations to a batch of examples.
 
-    For multi-scale training, chooses one scale randomly per batch
-    to ensure all images in the batch have the same size (required for torch.stack).
+    Supports both:
+      - annotations as dict-of-lists (HF detection format)
+      - annotations as list-of-dicts (older / custom formats)
 
-    Args:
-        examples: Batch dict with 'image' and 'annotations' keys
-        config: Augmentation config dict (includes multi_scale_sizes)
-
-    Returns:
-        Augmented batch with same structure
+    Returns examples with:
+      - image: list of augmented images (np arrays)
+      - annotations: list of dict-of-lists with keys: bbox, category_id, area, iscrowd
     """
-    import random
-
     # Choose scale once per batch for multi-scale training
     multi_scale_sizes = config.get("multi_scale_sizes", [512])
     if len(multi_scale_sizes) > 1:
@@ -181,43 +227,107 @@ def apply_augmentations(
     # Create transform with chosen batch scale
     transform = get_augmentation_transform(config, batch_scale=batch_scale)
 
-    images = []
-    annotations = []
+    images_out: list[np.ndarray] = []
+    annotations_out: list[dict] = []
 
     for image, anns in zip(examples["image"], examples["annotations"], strict=False):
         # Convert PIL image to numpy
         image_np = np.array(image.convert("RGB"))
 
-        # Extract bboxes and labels
-        bboxes = [ann["bbox"] for ann in anns]
-        category_ids = [ann["category_id"] for ann in anns]
+        # --- Normalize annotations to simple lists for Albumentations ---
+        if isinstance(anns, dict):
+            # HF detection format: dict-of-lists
+            bboxes = anns.get("bbox", [])
+            category_ids = anns.get("category_id", [])
+        else:
+            # list-of-dicts format
+            bboxes = [ann["bbox"] for ann in anns]
+            category_ids = [ann["category_id"] for ann in anns]
 
-        # Apply augmentations
-        transformed = transform(
-            image=image_np,
-            bboxes=bboxes,
-            category_ids=category_ids,
-        )
+        # --- Filter obviously degenerate input boxes (zero/negative size) ---
+        filtered_bboxes = []
+        filtered_category_ids = []
+        for bbox, cat_id in zip(bboxes, category_ids, strict=False):
+            x, y, w, h = bbox[:4]
+            # drop boxes with (almost) zero width/height
+            if w <= 1e-3 or h <= 1e-3:
+                continue
+            filtered_bboxes.append(bbox)
+            filtered_category_ids.append(cat_id)
 
-        # Update annotations with transformed bboxes
-        transformed_anns = []
-        for bbox, _cat_id, orig_ann in zip(
+        bboxes = filtered_bboxes
+        category_ids = filtered_category_ids
+
+        # Albumentations can handle empty bbox lists, so that's fine.
+        # Now apply transforms, but be defensive about rare degenerate cases.
+        try:
+            transformed = transform(
+                image=image_np,
+                bboxes=bboxes,
+                category_ids=category_ids,
+            )
+        except ValueError as e:
+            # Clamp COCO boxes into the valid range if Albumentations complains
+            if "Expected x_max" in str(e) or "Expected y_max" in str(e):
+                clamped_bboxes = []
+                for bbox in bboxes:
+                    x_min, y_min, width, height = bbox[:4]
+                    x_min = max(0.0, min(1.0, x_min))
+                    y_min = max(0.0, min(1.0, y_min))
+                    max_width = max(1e-6, 1.0 - x_min - 1e-6)
+                    max_height = max(1e-6, 1.0 - y_min - 1e-6)
+                    width = max(0.0, min(max_width, width))
+                    height = max(0.0, min(max_height, height))
+                    clamped_bboxes.append([x_min, y_min, width, height])
+
+                try:
+                    transformed = transform(
+                        image=image_np,
+                        bboxes=clamped_bboxes,
+                        category_ids=category_ids,
+                    )
+                except ValueError as retry_error:
+                    print(
+                        "[Albumentations] Skipping bbox transform after clamping; "
+                        f"original error: {e}; retry error: {retry_error}"
+                    )
+                    transformed = {
+                        "image": image_np,
+                        "bboxes": clamped_bboxes,
+                        "category_ids": category_ids,
+                    }
+            else:
+                print(f"[Albumentations] Skipping bbox transform for one sample due to error: {e}")
+                transformed = {
+                    "image": image_np,
+                    "bboxes": bboxes,
+                    "category_ids": category_ids,
+                }
+
+        # --- Rebuild annotations as dict-of-lists (what preprocess_batch expects) ---
+        new_anns = {
+            "bbox": [],
+            "category_id": [],
+            "area": [],
+            "iscrowd": [],
+        }
+
+        for bbox, cat_id in zip(
             transformed["bboxes"],
             transformed["category_ids"],
-            anns,
             strict=False,
         ):
-            ann_copy = orig_ann.copy()
-            ann_copy["bbox"] = list(bbox)
-            # Recalculate area
-            ann_copy["area"] = bbox[2] * bbox[3]
-            transformed_anns.append(ann_copy)
+            bbox = list(bbox)
+            new_anns["bbox"].append(bbox)
+            new_anns["category_id"].append(int(cat_id))
+            new_anns["area"].append(float(bbox[2] * bbox[3]))  # w*h in COCO format
+            new_anns["iscrowd"].append(0)
 
-        images.append(transformed["image"])
-        annotations.append(transformed_anns)
+        images_out.append(transformed["image"])
+        annotations_out.append(new_anns)
 
-    examples["image"] = images
-    examples["annotations"] = annotations
+    examples["image"] = images_out
+    examples["annotations"] = annotations_out
     return examples
 
 
@@ -292,16 +402,18 @@ def prepare_dataset_for_training(
     augmentation_config: dict | None = None,
     cache_dir: str | None = None,
     max_samples: int | None = None,
+    pad_stride: int = 32,
 ) -> tuple:
     """Prepare dataset for training with preprocessing and augmentation.
 
     Args:
         dataset_name: 'publaynet' or 'doclaynet'
         split: Dataset split to load
-        image_processor: HuggingFace image processor for DETR
+        image_processor: HuggingFace image processor for DETR/DFine
         augmentation_config: Optional augmentation configuration (only used for 'train')
         cache_dir: Optional cache directory
         max_samples: If set and split != 'train', limit dataset to this many samples.
+        pad_stride: Align padding to this stride (match detector feature-map stride).
 
     Returns:
         Tuple of (processed dataset, class labels dict)
@@ -309,38 +421,46 @@ def prepare_dataset_for_training(
     # Load dataset
     if dataset_name.lower() == "publaynet":
         dataset, class_labels = load_publaynet(split, cache_dir)
+        is_publaynet = True
     elif dataset_name.lower() == "doclaynet":
         dataset, class_labels = load_doclaynet(split, cache_dir)
+        is_publaynet = False
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
     # Optional: limit number of samples for non-train splits
     if max_samples is not None and split != "train":
-        # If you want a random subset instead of the first N, shuffle here:
-        # dataset = dataset.shuffle(seed=42)
         n = min(max_samples, len(dataset))
         dataset = dataset.select(range(n))
 
-    # Apply augmentations if provided (train only)
-    if augmentation_config and split == "train":
-        dataset = dataset.with_transform(
-            lambda examples: apply_augmentations(examples, augmentation_config)
-        )
-
-    def preprocess_batch(examples):
+    def preprocess_batch(examples: dict) -> dict:
         """Preprocess batch with image processor."""
-        images = [img.convert("RGB") for img in examples["image"]]
+        # examples["image"] may contain PIL Images (no aug) or np.ndarray (after aug)
+        images = []
+        for img in examples["image"]:
+            if isinstance(img, np.ndarray):
+                # Ensure uint8 for images coming from Albumentations
+                if img.dtype != np.uint8:
+                    img = np.clip(img, 0, 255).astype(np.uint8)
+                img = Image.fromarray(img)
+            # Now img is PIL.Image.Image
+            images.append(img.convert("RGB"))
 
         # Format annotations for DETR - convert from dataset format to COCO format
         annotations = []
         for img_id, anns_dict in zip(examples["image_id"], examples["annotations"], strict=False):
-            # Convert dict of lists to list of dicts
+            # anns_dict is dict-of-lists: "bbox", "category_id", "area", "iscrowd"
             num_objects = len(anns_dict["bbox"])
             anns_list = []
             for i in range(num_objects):
-                # Remap category IDs from dataset format to 0-indexed model format
                 dataset_cat_id = anns_dict["category_id"][i]
-                model_cat_id = PUBLAYNET_ID_MAPPING.get(dataset_cat_id, dataset_cat_id - 1)
+
+                if is_publaynet:
+                    # Remap category IDs from dataset format to 0-indexed model format
+                    model_cat_id = PUBLAYNET_ID_MAPPING.get(dataset_cat_id, dataset_cat_id - 1)
+                else:
+                    # DocLayNet is (effectively) already 0-indexed
+                    model_cat_id = dataset_cat_id
 
                 anns_list.append(
                     {
@@ -358,14 +478,60 @@ def prepare_dataset_for_training(
                 }
             )
 
-        # Process with HuggingFace processor
+        def infer_resized_shape(height: int, width: int, size_dict: dict) -> tuple[int, int]:
+            height = max(1, int(height))
+            width = max(1, int(width))
+            if not isinstance(size_dict, dict):
+                return height, width
+            if "height" in size_dict and "width" in size_dict:
+                return max(1, int(size_dict["height"])), max(1, int(size_dict["width"]))
+            if "shortest_edge" in size_dict:
+                target_short = size_dict["shortest_edge"]
+                short, long = sorted((height, width))
+                scale = float(target_short) / max(1.0, float(short))
+                new_height = max(1, int(round(height * scale)))
+                new_width = max(1, int(round(width * scale)))
+                max_long = size_dict.get("longest_edge")
+                if max_long is not None:
+                    current_long = max(new_height, new_width)
+                    if current_long > max_long:
+                        long_scale = float(max_long) / float(current_long)
+                        new_height = max(1, int(round(new_height * long_scale)))
+                        new_width = max(1, int(round(new_width * long_scale)))
+                return new_height, new_width
+            if "max_height" in size_dict and "max_width" in size_dict:
+                return (
+                    min(max(1, int(size_dict["max_height"])), height),
+                    min(max(1, int(size_dict["max_width"])), width),
+                )
+            return height, width
+
+        processor_size = getattr(image_processor, "size", None)
+        do_resize = getattr(image_processor, "do_resize", False)
+        candidate_sizes: list[tuple[int, int]] = []
+        for img in images:
+            h = getattr(img, "height", 1)
+            w = getattr(img, "width", 1)
+            if do_resize and isinstance(processor_size, dict):
+                candidate_sizes.append(infer_resized_shape(h, w, processor_size))
+            else:
+                candidate_sizes.append((max(1, h), max(1, w)))
+
+        target_height = max((h for h, _ in candidate_sizes), default=1)
+        target_width = max((w for _, w in candidate_sizes), default=1)
+
+        # Pad to stride-aligned shapes (match detector strides)
+        stride = max(1, pad_stride)
+        pad_height = max(1, math.ceil(target_height / stride) * stride)
+        pad_width = max(1, math.ceil(target_width / stride) * stride)
+
         encoding = image_processor(
             images=images,
             annotations=annotations,
             return_tensors="pt",
+            pad_size={"height": pad_height, "width": pad_width},
         )
 
-        # Convert labels to list format for batching
         labels = list(encoding["labels"])
 
         return {
@@ -374,201 +540,17 @@ def prepare_dataset_for_training(
             "labels": labels,
         }
 
-    # Apply preprocessing
-    dataset = dataset.with_transform(preprocess_batch)
+    # Combine (optional) augmentation + preprocessing into one transform
+    if augmentation_config is not None and split == "train":
+
+        def full_transform(examples: dict) -> dict:
+            augmented = apply_augmentations(examples, augmentation_config)
+            return preprocess_batch(augmented)
+    else:
+
+        def full_transform(examples: dict) -> dict:
+            return preprocess_batch(examples)
+
+    dataset = dataset.with_transform(full_transform)
 
     return dataset, class_labels
-
-
-def visualize_augmentations(
-    dataset_name: str,
-    num_samples: int = 4,
-    output_dir: str = "outputs/augmentation_samples",
-    cache_dir: str | None = None,
-) -> None:
-    """Generate sample images showing augmentation effects.
-
-    Args:
-        dataset_name: 'publaynet' or 'doclaynet'
-        num_samples: Number of samples to generate
-        output_dir: Directory to save visualization images
-        cache_dir: Optional cache directory for datasets
-    """
-    from PIL import Image, ImageDraw, ImageFont
-
-    # Create output directory
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    # Load dataset (use val split which is smaller for faster loading)
-    if dataset_name.lower() == "publaynet":
-        dataset, class_labels = load_publaynet("val", cache_dir)
-    elif dataset_name.lower() == "doclaynet":
-        dataset, class_labels = load_doclaynet("val", cache_dir)
-    else:
-        raise ValueError(f"Unknown dataset: {dataset_name}")
-
-    # Create augmentation transform (use single scale for visualization)
-    aug_config = {
-        "rotate_limit": 5,
-        "brightness_contrast": 0.2,
-        "noise_std": 0.01,
-        "multi_scale_sizes": [512],  # Single scale for vis
-    }
-    transform = get_augmentation_transform(aug_config, batch_scale=512)
-
-    print(f"Generating {num_samples} augmentation samples...")
-
-    for idx in range(num_samples):
-        # Get sample
-        sample = dataset[idx]
-        image = sample["image"]
-        annotations = sample["annotations"]
-
-        # Convert to numpy for augmentation
-        image_np = np.array(image.convert("RGB"))
-
-        # Extract bboxes and labels
-        bboxes = [ann["bbox"] for ann in annotations]
-        category_ids = [ann["category_id"] for ann in annotations]
-
-        # Apply augmentations
-        augmented = transform(
-            image=image_np,
-            bboxes=bboxes,
-            category_ids=category_ids,
-        )
-
-        # Draw bboxes on both original and augmented
-        def draw_bboxes(img_np, boxes, labels):
-            img_draw = Image.fromarray(img_np)
-            draw = ImageDraw.Draw(img_draw)
-
-            colors = [
-                "#FF6B6B",
-                "#4ECDC4",
-                "#45B7D1",
-                "#FFA07A",
-                "#98D8C8",
-                "#F7DC6F",
-                "#BB8FCE",
-                "#85C1E2",
-                "#F8B739",
-                "#52B788",
-                "#F06292",
-            ]
-
-            for bbox, label in zip(boxes, labels, strict=False):
-                x, y, w, h = bbox
-                color = colors[int(label) % len(colors)]
-
-                # Draw rectangle
-                draw.rectangle([x, y, x + w, y + h], outline=color, width=3)
-
-                # Draw label
-                label_name = class_labels.get(int(label), str(int(label)))
-                try:
-                    font = ImageFont.truetype(
-                        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16
-                    )
-                except Exception:
-                    font = ImageFont.load_default()
-
-                # Draw label background
-                text_bbox = draw.textbbox((x, y - 20), label_name, font=font)
-                draw.rectangle(text_bbox, fill=color)
-                draw.text((x, y - 20), label_name, fill="white", font=font)
-
-            return np.array(img_draw)
-
-        # Draw bboxes
-        original_with_boxes = draw_bboxes(image_np, bboxes, category_ids)
-        augmented_with_boxes = draw_bboxes(
-            augmented["image"], augmented["bboxes"], augmented["category_ids"]
-        )
-
-        # Create side-by-side comparison
-        h, w = image_np.shape[:2]
-        comparison = np.zeros((h, w * 2, 3), dtype=np.uint8)
-        comparison[:, :w] = original_with_boxes
-        comparison[:, w:] = augmented_with_boxes
-
-        # Add labels
-        comparison_img = Image.fromarray(comparison)
-        draw = ImageDraw.Draw(comparison_img)
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
-        except Exception:
-            font = ImageFont.load_default()
-
-        draw.text(
-            (20, 20), "Original", fill="white", font=font, stroke_width=2, stroke_fill="black"
-        )
-        draw.text(
-            (w + 20, 20), "Augmented", fill="white", font=font, stroke_width=2, stroke_fill="black"
-        )
-
-        # Save
-        output_file = output_path / f"sample_{idx:02d}.png"
-        comparison_img.save(output_file)
-        print(f"Saved: {output_file}")
-
-    print(f"\nSamples saved to {output_path}")
-
-
-def preprocess_cli() -> None:
-    """CLI entry point for data preprocessing."""
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Preprocess datasets for training")
-    parser.add_argument(
-        "command",
-        choices=["load", "visualize"],
-        help="Command to run: 'load' to verify dataset loading, 'visualize' to generate augmentation samples",
-    )
-    parser.add_argument(
-        "dataset",
-        choices=["publaynet", "doclaynet"],
-        help="Dataset to use",
-    )
-    parser.add_argument(
-        "--cache-dir",
-        type=str,
-        default=None,
-        help="Cache directory for datasets",
-    )
-    parser.add_argument(
-        "--num-samples",
-        type=int,
-        default=4,
-        help="Number of samples to generate (for visualize command)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="outputs/augmentation_samples",
-        help="Output directory for visualization samples",
-    )
-    args = parser.parse_args()
-
-    if args.command == "load":
-        print(f"Loading {args.dataset} dataset...")
-        if args.dataset == "publaynet":
-            train_ds, labels = load_publaynet("train", args.cache_dir)
-            val_ds, _ = load_publaynet("val", args.cache_dir)
-        else:
-            train_ds, labels = load_doclaynet("train", args.cache_dir)
-            val_ds, _ = load_doclaynet("val", args.cache_dir)
-
-        print("\nDataset loaded successfully!")
-        print(f"Train samples: {len(train_ds)}")
-        print(f"Val samples: {len(val_ds)}")
-        print(f"Classes: {labels}")
-
-    elif args.command == "visualize":
-        visualize_augmentations(
-            args.dataset,
-            num_samples=args.num_samples,
-            output_dir=args.output_dir,
-            cache_dir=args.cache_dir,
-        )

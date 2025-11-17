@@ -107,17 +107,75 @@ class DataConfig(BaseModel):
         return v.lower()
 
 
+class PerspectiveAugConfig(BaseModel):
+    probability: float = Field(
+        default=0.3, ge=0, le=1, description="Probability of perspective warp"
+    )
+    scale_min: float = Field(default=0.02, ge=0, description="Minimum perspective scale")
+    scale_max: float = Field(default=0.05, ge=0, description="Maximum perspective scale")
+
+
+class ElasticAugConfig(BaseModel):
+    probability: float = Field(
+        default=0.2, ge=0, le=1, description="Probability of elastic transform"
+    )
+    alpha: float = Field(default=30, ge=0, description="Elastic alpha magnitude")
+    sigma: float = Field(default=5, ge=0, description="Elastic sigma")
+
+
+class BrightnessContrastConfig(BaseModel):
+    limit: float = Field(default=0.2, ge=0, description="Brightness/contrast variation limit")
+    probability: float = Field(
+        default=0.5, ge=0, le=1, description="Probability of brightness/contrast change"
+    )
+
+
+class BlurConfig(BaseModel):
+    probability: float = Field(
+        default=0.3, ge=0, le=1, description="Probability of blur augmentations"
+    )
+    blur_limit: int = Field(default=3, ge=1, description="Maximum blur kernel size")
+
+
+class CompressionConfig(BaseModel):
+    probability: float = Field(
+        default=0.3, ge=0, le=1, description="Probability of JPEG compression"
+    )
+    quality_min: int = Field(default=75, ge=1, description="Minimum JPEG quality")
+    quality_max: int = Field(default=100, ge=1, description="Maximum JPEG quality")
+
+
+class NoiseConfig(BaseModel):
+    probability: float = Field(default=0.2, ge=0, le=1, description="Probability of Gaussian noise")
+    std_min: float = Field(default=0.0, ge=0, description="Minimum noise standard deviation")
+    std_max: float = Field(default=0.01, ge=0, description="Maximum noise standard deviation")
+
+
 class AugmentationConfig(BaseModel):
     """Augmentation configuration."""
 
-    horizontal_flip: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="Horizontal flip probability"
+    multi_scale_sizes: list[int] = Field(
+        default_factory=lambda: [512],
+        description="Desired short-side sizes for multi-scale training.",
+    )
+    max_long_side: int | None = Field(
+        default=960,
+        description="Maximum allowed long-side size when aspect-preserving resize is enabled.",
+    )
+    force_square_resize: bool = Field(
+        default=False,
+        description="Use legacy square resizing instead of aspect-preserving multi-scale.",
     )
     rotate_limit: int = Field(default=5, ge=0, le=90, description="Rotation angle limit in degrees")
-    brightness_contrast: float = Field(
-        default=0.2, ge=0.0, le=1.0, description="Brightness/contrast variation"
+    rotate_prob: float = Field(
+        default=0.5, ge=0, le=1, description="Probability of rotation augmentation"
     )
-    noise_std: float = Field(default=0.01, ge=0.0, description="Gaussian noise standard deviation")
+    perspective: PerspectiveAugConfig = Field(default_factory=PerspectiveAugConfig)
+    elastic: ElasticAugConfig = Field(default_factory=ElasticAugConfig)
+    brightness_contrast: BrightnessContrastConfig = Field(default_factory=BrightnessContrastConfig)
+    blur: BlurConfig = Field(default_factory=BlurConfig)
+    compression: CompressionConfig = Field(default_factory=CompressionConfig)
+    noise: NoiseConfig = Field(default_factory=NoiseConfig)
 
     model_config = {"extra": "allow"}  # Allow additional augmentation params
 

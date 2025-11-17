@@ -29,10 +29,32 @@ data:
   num_workers: 8
 
 augmentation:
-  horizontal_flip: 0.5
+  multi_scale_sizes: [480, 512, 544, 576, 608, 640]
+  max_long_side: 928
   rotate_limit: 5
-  brightness_contrast: 0.2
-  noise_std: 0.01
+  rotate_prob: 0.5
+  perspective:
+    probability: 0.3
+    scale_min: 0.02
+    scale_max: 0.05
+  elastic:
+    probability: 0.2
+    alpha: 30
+    sigma: 5
+  brightness_contrast:
+    limit: 0.2
+    probability: 0.5
+  blur:
+    probability: 0.3
+    blur_limit: 3
+  compression:
+    probability: 0.3
+    quality_min: 75
+    quality_max: 100
+  noise:
+    probability: 0.2
+    std_min: 0.0
+    std_max: 0.01
 
 training:
   # TrainingArguments parameters - passed as **kwargs

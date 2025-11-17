@@ -16,6 +16,7 @@ from doc_obj_detect.data import (
     get_augmentation_transform,
     prepare_dataset_for_training,
 )
+from doc_obj_detect.visualize import visualize_augmentations
 
 
 def test_class_labels():
@@ -93,11 +94,9 @@ def test_prepare_dataset_invalid_name():
         prepare_dataset_for_training("invalid", "train", MagicMock())
 
 
-@patch("doc_obj_detect.data.load_publaynet")
+@patch("doc_obj_detect.visualize.load_publaynet")
 def test_visualize_augmentations(mock_load, tmp_path):
     """Test augmentation visualization."""
-    from doc_obj_detect.data import visualize_augmentations
-
     # Create mock dataset
     mock_sample = {
         "image": Image.fromarray(np.random.randint(0, 255, (512, 512, 3), dtype=np.uint8)),

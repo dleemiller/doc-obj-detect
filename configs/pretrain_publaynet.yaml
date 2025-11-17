@@ -45,23 +45,38 @@ data:
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
   image_size: 512  # Standard document detection size
-  batch_size: 32  # Match D-FINE defaults and SOTA paper (16-32 range)
+  batch_size: 20  # Match D-FINE defaults and SOTA paper (16-32 range)
   max_eval_samples: 1000
   num_workers: 4  # Reduced to avoid "too many open files"
 
 augmentation:
   # Multi-scale training for better scale invariance and small object detection
-  # Range includes eval size (640) to avoid extrapolation
-  multi_scale_sizes: [448, 512, 576, 640]
-
-  # Document-specific augmentations (all implemented in data.py pipeline)
-  # Perspective distortion: p=0.3, scale=(0.02, 0.05)
-  # Elastic transform: p=0.2, alpha=30, sigma=5
-  rotate_limit: 5  # Small rotations (p=0.5) to preserve text readability
-  brightness_contrast: 0.2  # RandomBrightnessContrast (p=0.5)
-  # Blur: OneOf[MotionBlur, GaussianBlur] (p=0.3, blur_limit=3)
-  # JPEG compression: p=0.3, quality_range=(75, 100)
-  noise_std: 0.01  # GaussNoise (p=0.2)
+  multi_scale_sizes: [480, 512, 544, 576, 608, 640]
+  max_long_side: 928
+  rotate_limit: 5
+  rotate_prob: 0.5
+  perspective:
+    probability: 0.3
+    scale_min: 0.02
+    scale_max: 0.05
+  elastic:
+    probability: 0.2
+    alpha: 30
+    sigma: 5
+  brightness_contrast:
+    limit: 0.2
+    probability: 0.5
+  blur:
+    probability: 0.3
+    blur_limit: 3
+  compression:
+    probability: 0.3
+    quality_min: 75
+    quality_max: 100
+  noise:
+    probability: 0.2
+    std_min: 0.0
+    std_max: 0.01
 
 training:
   # Training schedule: 12 epochs to match SOTA paper
@@ -80,7 +95,7 @@ training:
 
   # Warmup and scheduling
   lr_scheduler_type: "cosine_with_min_lr"
-  warmup_ratio: 0.1  # 10% of total training (was 5000 steps, too long for rapid convergence)
+  warmup_ratio: 0.08  # 8% of total training (was 5000 steps, too long for rapid convergence)
   lr_scheduler_kwargs:
     min_lr: 1.0e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
 

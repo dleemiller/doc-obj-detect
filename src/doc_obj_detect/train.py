@@ -1,6 +1,7 @@
 """Training script for document object detection models."""
 
 import argparse
+import copy
 from pathlib import Path
 
 import torch
@@ -60,6 +61,27 @@ def train(config_path: str) -> None:
         **dfine_config,
     )
 
+    train_processor = image_processor  # used for training (with multiscale aug)
+
+    eval_processor = copy.deepcopy(image_processor)
+    train_processor.do_resize = False
+    train_processor.do_pad = True
+
+    aug_model = config.augmentation.model_dump() if config.augmentation else None
+    if aug_model and aug_model.get("multi_scale_sizes"):
+        eval_short_side = max(aug_model["multi_scale_sizes"])
+    else:
+        eval_short_side = config.data.image_size
+    eval_long_side = (
+        aug_model.get("max_long_side") if aug_model and aug_model.get("max_long_side") else None
+    )
+    eval_size = {"shortest_edge": eval_short_side}
+    if eval_long_side:
+        eval_size["longest_edge"] = eval_long_side
+    eval_processor.size = eval_size
+    eval_processor.do_resize = True
+    eval_processor.do_pad = True  # usually good for detectors so everything is aligned
+
     # Print model info
     param_info = get_trainable_parameters(model)
     print(f"Total parameters: {param_info['total']:,}")
@@ -77,23 +99,25 @@ def train(config_path: str) -> None:
     # Prepare datasets
     print("\nPreparing datasets...")
     data_config = config.data
-    aug_config = config.augmentation.model_dump() if config.augmentation else None
+    detector_stride = max(config.dfine.feat_strides)
 
     train_dataset, _ = prepare_dataset_for_training(
         dataset_name=data_config.dataset,
         split=data_config.train_split,
-        image_processor=image_processor,
-        augmentation_config=aug_config,
+        image_processor=train_processor,
+        augmentation_config=aug_model,
         cache_dir=data_config.cache_dir,
+        pad_stride=detector_stride,
     )
 
     val_dataset, class_labels = prepare_dataset_for_training(
         dataset_name=data_config.dataset,
         split=data_config.val_split,
-        image_processor=image_processor,
-        augmentation_config=None,  # No augmentation for validation
+        image_processor=eval_processor,
+        augmentation_config=None,
         cache_dir=data_config.cache_dir,
-        max_samples=data_config.max_eval_samples,  # <-- new
+        max_samples=data_config.max_eval_samples,
+        pad_stride=detector_stride,
     )
 
     print(f"Train samples: {len(train_dataset)}")
@@ -159,8 +183,8 @@ def train(config_path: str) -> None:
     def compute_metrics_fn(eval_pred):
         return compute_map(
             eval_pred=eval_pred,
-            image_processor=image_processor,
-            id2label=dict(enumerate(class_labels)),
+            image_processor=eval_processor,
+            id2label=class_labels,
             threshold=0.0,  # Post-process all detections, NMS happens in post_process
             max_eval_images=data_config.max_eval_samples,  # GPU-batched processing, 5-10x speedup
         )
@@ -172,7 +196,7 @@ def train(config_path: str) -> None:
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         data_collator=collate_fn,
-        tokenizer=image_processor,  # Save processor with model
+        processing_class=image_processor,  # Save processor with model
         callbacks=callbacks,
         compute_metrics=compute_metrics_fn,
     )

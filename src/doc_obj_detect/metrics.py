@@ -153,6 +153,8 @@ def compute_map(
         box_format="xyxy",
         class_metrics=False,
     )
+    # Allow >100 detections/image without noisy warnings (we rely on HF post-processing thresholds)
+    metric.warn_on_many_detections = False
 
     # Single update with all images (capped by max_eval_images)
     metric.update(processed_predictions_cpu, processed_targets_cpu)

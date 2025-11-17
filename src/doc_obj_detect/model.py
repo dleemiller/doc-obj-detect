@@ -5,11 +5,7 @@ Combines ConvNeXt-DINOv3 backbone with D-FINE detection head.
 
 from typing import Any
 
-from transformers import (
-    AutoImageProcessor,
-    DFineConfig,
-    DFineForObjectDetection,
-)
+from transformers import AutoImageProcessor, DFineConfig, DFineForObjectDetection
 
 
 def create_model(
@@ -55,15 +51,35 @@ def create_model(
             param.requires_grad = False
 
     # Get image processor
-    # D-FINE uses standard DETR-style preprocessing
-    # Note: do_resize=False because Albumentations handles resizing (including multi-scale)
-    # The augmentation pipeline resizes images, so image_processor only normalizes/pads
-    image_processor = AutoImageProcessor.from_pretrained(
-        "SenseTime/deformable-detr",  # Use as base
-        do_resize=False,  # Albumentations handles resize (including multi-scale training)
-        do_pad=True,  # Pad to make batch-compatible
-        size={"height": image_size, "width": image_size},  # Used for padding reference
-    )
+    # Prefer the DFine preprocessor, fallback to Deformable DETR when unavailable
+    processor_candidates = [
+        "ustc-community/dfine-xlarge-obj2coco",
+        "ustc-community/dfine-xlarge-coco",
+    ]
+    image_processor = None
+    last_error: Exception | None = None
+
+    for processor_id in processor_candidates:
+        try:
+            image_processor = AutoImageProcessor.from_pretrained(
+                processor_id,
+                do_resize=False,  # Albumentations handles resize (including multi-scale)
+                do_pad=True,  # Pad to make batch-compatible
+                size={"height": image_size, "width": image_size},  # Used for padding reference
+            )
+            if processor_id != processor_candidates[0]:
+                print(
+                    f"[Model] Falling back to {processor_id} for image processing "
+                    f"(preferred {processor_candidates[0]} unavailable)."
+                )
+            break
+        except OSError as error:
+            last_error = error
+
+    if image_processor is None:
+        raise (
+            last_error if last_error is not None else RuntimeError("Failed to load image processor")
+        )
 
     return model, image_processor
 
