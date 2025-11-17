@@ -128,7 +128,10 @@ class TrainingConfig(BaseModel):
     num_train_epochs: int = Field(gt=0, description="Number of training epochs")
     learning_rate: float = Field(gt=0, description="Learning rate")
     weight_decay: float = Field(ge=0, description="Weight decay")
-    warmup_steps: int = Field(ge=0, description="Warmup steps")
+    # warmup_steps: int | None = Field(default=None, ge=0, description="Warmup steps (optional)")
+    warmup_ratio: float | None = Field(
+        default=None, ge=0, le=1, description="Warmup ratio (optional, alternative to warmup_steps)"
+    )
     gradient_accumulation_steps: int = Field(
         default=1, gt=0, description="Gradient accumulation steps"
     )

@@ -79,10 +79,10 @@ training:
   weight_decay: 0.05  # AdamW weight decay
 
   # Warmup and scheduling
-  lr_scheduler_type: "cosine"
+  lr_scheduler_type: "cosine_with_min_lr"
   warmup_ratio: 0.1  # 10% of total training (was 5000 steps, too long for rapid convergence)
   lr_scheduler_kwargs:
-    eta_min: 1.0e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
+    min_lr: 1.0e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
 
   # Gradient settings
   gradient_accumulation_steps: 1
