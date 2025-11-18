@@ -13,9 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> None:
-    if not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.INFO, format="%(message)s")
-
     parser = argparse.ArgumentParser(prog="doc-obj-detect", description="Unified CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

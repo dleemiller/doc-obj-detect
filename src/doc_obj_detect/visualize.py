@@ -147,9 +147,6 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 def main() -> None:
     """CLI entry point for augmentation visualization."""
-    if not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.INFO, format="%(message)s")
-
     parser = argparse.ArgumentParser(description="Visualize document augmentations.")
     parser.add_argument(
         "dataset",
