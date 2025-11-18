@@ -5,7 +5,7 @@ Modern document understanding needs both page-level accuracy and production-read
 ## Highlights
 - **Architecture:** ConvNeXt Large DINOv3 backbone feeding D-FINE (multi-scale encoder, hybrid matching) with 300 object queries.
 - **Aspect-Preserving Multiscale:** Short edge randomly sampled from `[480, 512, 544, 576, 608, 640]` while keeping native aspect ratio and capping the long side at 928 px.
-- **Datasets:** PubLayNet for pretraining (5 classes) → DocLayNet for fine-tuning (11 classes). Hugging Face Datasets handles download/caching.
+- **Datasets:** PubLayNet for pretraining (5 classes) → DocLayNet for fine-tuning (11 classes). Hugging Face Datasets handles download/caching. Config schemas now validate image sizes, batch sizes, and augmentations so invalid settings fail fast (e.g., multiscale sizes must be 64–4096 px, `max_long_side` ≥ max short edge).
 - **Pipelines:** `configs/pretrain_publaynet.yaml`, `configs/finetune_doclaynet.yaml`, plus small-sample configs for debugging and evaluation.
 
 ## Quick Start
@@ -54,7 +54,7 @@ tests/                  # Pytest suites covering configs/data/runners/CLI
 - **Optimizer:** AdamW, `learning_rate=1e-4`, gradient clipping at 1.0, BF16 mixed precision.
 - **Batch size:** 16 images/device for long runs (use multi-GPU data parallel if needed).
 - **Scheduler:** Cosine with `min_lr=1e-5` (mirrors SOTA doc-det pipelines); step LR drop optional.
-- **Evaluation:** Short edge fixed at the max multiscale size (640) with the same 928 px long-edge cap to match training augmentations.
+- **Evaluation:** Short edge fixed at the max multiscale size (640) with the same 928 px long-edge cap to match training augmentations. Validators guarantee `max_long_side` is never smaller than the largest training scale.
 
 ## Notes
 - All scripts run through the CLI (`uv run doc-obj-detect ...`) so we don’t accumulate separate entry points.
