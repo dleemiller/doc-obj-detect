@@ -99,17 +99,31 @@ Document-friendly Albumentations config (now expressed via nested config classes
 
 ## 4. Distillation Plan
 
-While D-FINE already includes GO-LSD (self-distillation), we still need deployment-friendly heads. Our plan:
+While D-FINE already includes GO-LSD (self-distillation), we still need deployment-friendly heads. The distillation module introduced in this refactor formalizes that pipeline:
 
-1. **Teacher:** ConvNeXt-L + D-FINE (this repo).
-2. **Students:**
-   - RT-DETR variants (ConvNeXtV2 base).
-   - Lightweight D-FINE (GELAN encoder) if we need higher fidelity but lower latency.
-3. **Distillation Signals:**
-   - Use D-FINE’s refined distributions as soft labels for student heads (similar to GO-LSD but across models).
-   - Optionally mimic class logits + query embeddings when training RT-DETR.
+1. **Teacher:** ConvNeXt-L + D-FINE (frozen) loaded via `DFineForObjectDetection.from_pretrained`.
+2. **Students:** Smaller ConvNeXt variants (Base / Small / Tiny) driving the same D-FINE head, so we keep FDR + decoder semantics while shrinking the backbone:
+   - **Base:** `encoder_in_channels=[192,384,768]`
+   - **Small:** `[128,256,512]`
+   - **Tiny:** `[96,192,384]`
+   These mappings live in the new distillation config and model factory so we can change the backbone by editing YAML only.
+3. **Distillation Losses (implemented):**
+   - **Logit distillation:** configurable between KL (with temperature) and MSE.
+   - **Feature distillation:** optional MSE on the predicted boxes (acts as a proxy for GO-LSD’s localization refinement).
+   - **Loss mixing:** α (KD) + β (ground-truth) ensures we never lose anchor to real labels.
+4. **Datasets + Augs:** Reuse the same `DatasetFactory` + Albumentations pipeline as the teacher so we do not introduce domain drift.
 
-Because the teacher already captures localization uncertainty, students should converge faster than with plain L1/IoU supervision.
+### 4.1 Future GO-LSD Feature Distillation (Not Yet Implemented)
+
+To keep parity with the paper’s “Global Optimal Localization Self-Distillation” but across teacher→student, we will:
+
+- **Capture teacher distributions:** Hook into the teacher’s final decoder layer to extract the refined probability distributions (`Pr_t`, `Pr_b`, etc.) that GO-LSD uses internally.
+- **Student auxiliary heads:** Add a lightweight projection after each student decoder layer producing the same distribution format (bins × edges). These heads will only exist during training.
+- **Distribution KD:** Minimize KL/MSE between teacher and student distributions for each matched query. Because these are already normalized (softmax), temperature is unnecessary; we can use standard KL or a smoothed L2.
+- **Matching strategy:** Reuse the union-set matching from GO-LSD so we supervise both matched and unmatched queries, stabilizing dense layouts.
+- **Scheduling:** Start with distribution KD disabled for a few epochs so the student learns coarse localization from the logit loss, then enable GO-LSD KD once the student loss plateaus.
+
+Once this feature is implemented, the config will expose a `distill_go_lsd` block (bins, weighting, start epoch) but for now we are holding off until the base KD pipeline is fully validated. This plan ensures we can add GO-LSD-style feature transfer without reworking the current trainer.
 
 ---
 

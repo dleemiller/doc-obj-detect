@@ -16,30 +16,38 @@ uv sync --extra dev          # installs runtime + ruff/pre-commit
 pre-commit install           # optional but recommended
 ```
 
-### Train & Evaluate
+### Train / Evaluate / Distill (Unified CLI)
 ```bash
-uv run train --config configs/pretrain_publaynet.yaml
-uv run python src/doc_obj_detect/evaluate.py \
+uv run doc-obj-detect train --config configs/pretrain_publaynet.yaml
+uv run doc-obj-detect evaluate --config configs/pretrain_publaynet.yaml \
     --checkpoint outputs/pretrain_publaynet_dfine/checkpoint-XXXX
+uv run doc-obj-detect distill --config configs/distill.yaml
 ```
 
 ### Monitoring & Utilities
-- TensorBoard: `tensorboard --logdir outputs/pretrain_publaynet_dfine/logs`
-- VRAM sweep: `uv run python scripts/benchmark_vram.py`
-- Augmentation gallery: `uv run visualize-augmentations publaynet`
+- TensorBoard: `tensorboard --logdir outputs/<run>/logs`
+- Augmentation preview: `uv run doc-obj-detect visualize --dataset publaynet`
+- Dataset sanity check: `uv run doc-obj-detect dataset-info --dataset doclaynet`
 
 ## Project Layout
 ```
 src/doc_obj_detect/
-├─ config.py          # Pydantic schemas (model/data/augmentation/training)
-├─ data.py            # HF dataset wrappers + aspect-preserving multiscale aug
-├─ model.py           # D-FINE creation + processor loading
-├─ train.py / trainer.py
-├─ evaluate.py        # Standalone evaluation script
-└─ visualize.py       # Augmentation visualizations
-configs/              # YAML configs for pretrain, finetune, distill, tests
-scripts/              # Eval helpers, VRAM benchmarks
-tests/                # Pytest smoke tests for data/aug logic
+├─ cli/                 # central CLI entry point + subcommand handlers
+├─ config/              # Pydantic schemas + YAML loaders
+├─ data/                # HF dataset wrappers, Albumentations augmentor, collate_fn
+├─ models/              # ModelFactory + parameter utilities
+├─ training/
+│   ├─ base_runner.py   # shared dataset/processor/run-dir helpers
+│   ├─ runner.py        # TrainerRunner (teacher training)
+│   ├─ distill_runner.py# DistillRunner (student KD training)
+│   ├─ distillation.py  # DistillationTrainer (KL/MSE KD losses)
+│   ├─ evaluator.py     # EvaluatorRunner (checkpoint eval loop)
+│   ├─ trainer_core.py  # SplitLRTrainer (custom HF Trainer subclass)
+│   └─ callbacks.py     # Backbone unfreeze, etc.
+├─ metrics.py           # COCO-style mAP via torchmetrics
+└─ visualize.py         # Augmentation visualization utility
+configs/                # YAML configs for pretrain, finetune, distill, testing
+tests/                  # Pytest suites covering configs/data/runners/CLI
 ```
 
 ## Key Settings
@@ -49,8 +57,8 @@ tests/                # Pytest smoke tests for data/aug logic
 - **Evaluation:** Short edge fixed at the max multiscale size (640) with the same 928 px long-edge cap to match training augmentations.
 
 ## Notes
-- Always run tooling via `uv run …`; plain `python` or `pre-commit` outside uv won’t see the locked dependencies.
-- PubLayNet requires local HF caches (`datasets` warns that `trust_remote_code` is deprecated). If cache permissions block you, copy the dataset directory into a workspace-owned path and set `data.cache_dir`.
-- For DocLayNet training use 24 epochs as outlined in the paper and consider staged multiscale (start at `[512]`, widen after a few epochs) if gradients are noisy.
+- All scripts run through the CLI (`uv run doc-obj-detect ...`) so we don’t accumulate separate entry points.
+- Distillation currently exposes logit KL/MSE loss with optional predicted-box MSE; GO-LSD-style distribution distillation is scoped for a future milestone (see RESEARCH.md §4.1).
+- PubLayNet/DocLayNet downloads rely on Hugging Face Datasets; set `data.cache_dir` if `$HF_HOME` is not writable.
 
 See [RESEARCH.md](RESEARCH.md) for architecture experiments and ablations, and `CLAUDE.md` / `AGENTS.md` for contributor conventions.
