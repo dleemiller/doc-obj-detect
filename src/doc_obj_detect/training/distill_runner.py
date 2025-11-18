@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from transformers import DFineForObjectDetection, EarlyStoppingCallback, TrainingArguments
@@ -11,6 +12,8 @@ from doc_obj_detect.data import collate_fn
 from doc_obj_detect.models import ModelFactory
 from doc_obj_detect.training.base_runner import BaseRunner, ProcessorBundle
 from doc_obj_detect.training.distillation import DistillationTrainer
+
+logger = logging.getLogger(__name__)
 
 
 class DistillRunner(BaseRunner):
@@ -53,7 +56,7 @@ class DistillRunner(BaseRunner):
         final_dir.mkdir(parents=True, exist_ok=True)
         trainer.save_model(str(final_dir))
         processors.eval.save_pretrained(str(final_dir))
-        print(f"Distillation complete. Student model saved to {final_dir}")
+        logger.info("Distillation complete. Student model saved to %s", final_dir)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -68,10 +71,10 @@ class DistillRunner(BaseRunner):
         return artifacts.model, processors
 
     def _build_datasets(self, processors: ProcessorBundle):
-        print("\nPreparing datasets...")
+        logger.info("Preparing datasets...")
         train_dataset, val_dataset, class_labels = super()._build_datasets(processors)
-        print(f"Train samples: {len(train_dataset)}")
-        print(f"Val samples: {len(val_dataset)}")
+        logger.info("Train samples: %s", len(train_dataset))
+        logger.info("Val samples: %s", len(val_dataset))
         return train_dataset, val_dataset, class_labels
 
     def _build_training_args(self, run_paths):

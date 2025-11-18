@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from doc_obj_detect.config import TrainConfig, load_train_config
 from doc_obj_detect.data import DatasetFactory, collate_fn
 from doc_obj_detect.metrics import compute_map
 from doc_obj_detect.utils import prepare_run_dirs, setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,12 +48,12 @@ class EvaluatorRunner:
         max_eval_samples: int | None = None,
     ) -> dict[str, float]:
         checkpoint_path = str(checkpoint_path)
-        print("=" * 80)
-        print(f"Evaluating Checkpoint: {checkpoint_path}")
-        print("=" * 80)
+        logger.info("=" * 80)
+        logger.info("Evaluating Checkpoint: %s", checkpoint_path)
+        logger.info("=" * 80)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"\nDevice: {device}")
+        logger.info("Device: %s", device)
 
         model, processor = self._load_checkpoint(checkpoint_path, device)
         run_paths = prepare_run_dirs(self.config.output)
@@ -75,7 +78,7 @@ class EvaluatorRunner:
     # Helpers
     # ------------------------------------------------------------------
     def _load_checkpoint(self, checkpoint_path: str, device: torch.device):
-        print("\nLoading model from checkpoint...")
+        logger.info("Loading model from checkpoint...")
         model = DFineForObjectDetection.from_pretrained(checkpoint_path)
         processor = AutoImageProcessor.from_pretrained(checkpoint_path)
         processor.size = self._build_eval_size()
@@ -97,7 +100,7 @@ class EvaluatorRunner:
 
     def _build_dataset(self, processor, max_eval_samples: int | None):
         data_cfg = self.config.data
-        print("\nPreparing validation dataset...")
+        logger.info("Preparing validation dataset...")
         factory = DatasetFactory(
             dataset_name=data_cfg.dataset,
             image_processor=processor,
@@ -110,12 +113,12 @@ class EvaluatorRunner:
             max_samples=max_eval_samples,
             apply_augmentation=False,
         )
-        print(f"Validation samples: {len(dataset):,}")
-        print(f"Classes: {class_labels}")
+        logger.info("Validation samples: %s", f"{len(dataset):,}")
+        logger.info("Classes: %s", class_labels)
         return dataset, class_labels
 
     def _build_dataloader(self, dataset, batch_size: int, num_workers: int):
-        print(f"Batch size: {batch_size}")
+        logger.info("Batch size: %s", batch_size)
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -134,9 +137,9 @@ class EvaluatorRunner:
         max_eval_samples,
         device,
     ) -> dict[str, float]:
-        print("\n" + "=" * 80)
-        print("Running Evaluation...")
-        print("=" * 80 + "\n")
+        logger.info("=" * 80)
+        logger.info("Running Evaluation...")
+        logger.info("=" * 80)
 
         all_predictions: list[Any] = []
         all_targets: list[Any] = []
@@ -210,16 +213,16 @@ class EvaluatorRunner:
             "eval_loss": "Loss",
         }
 
-        print("\n" + "=" * 80)
-        print("Evaluation Results")
-        print("=" * 80)
-        print(f"\nCheckpoint: {checkpoint_path}")
-        print(f"Validation samples: {num_samples:,}")
-        print("\nCOCO mAP Metrics:")
-        print("-" * 80)
+        logger.info("=" * 80)
+        logger.info("Evaluation Results")
+        logger.info("=" * 80)
+        logger.info("Checkpoint: %s", checkpoint_path)
+        logger.info("Validation samples: %s", f"{num_samples:,}")
+        logger.info("COCO mAP Metrics:")
+        logger.info("-" * 80)
         for key, name in metric_names.items():
             if key in metrics:
-                print(f"{name:.<40} {metrics[key]:.4f}")
+                logger.info("%s %0.4f", f"{name:.<40}", metrics[key])
 
 
 __all__ = ["EvaluatorRunner"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import torch
@@ -14,6 +15,8 @@ from doc_obj_detect.training.base_runner import BaseRunner, ProcessorBundle
 from doc_obj_detect.training.callbacks import UnfreezeBackboneCallback
 from doc_obj_detect.training.trainer_core import SplitLRTrainer
 from doc_obj_detect.utils import RunPaths
+
+logger = logging.getLogger(__name__)
 
 
 class TrainerRunner(BaseRunner):
@@ -31,9 +34,9 @@ class TrainerRunner(BaseRunner):
     # Public API
     # ------------------------------------------------------------------
     def run(self) -> None:
-        print("=" * 80)
-        print("Training Configuration")
-        print("=" * 80)
+        logger.info("=" * 80)
+        logger.info("Training Configuration")
+        logger.info("=" * 80)
 
         model, processors = self._build_model_and_processors()
         train_dataset, val_dataset, class_labels = self._build_datasets(processors)
@@ -52,18 +55,18 @@ class TrainerRunner(BaseRunner):
             compute_metrics=compute_metrics_fn,
         )
 
-        print("\n" + "=" * 80)
-        print("Starting training...")
-        print("=" * 80 + "\n")
+        logger.info("=" * 80)
+        logger.info("Starting training...")
+        logger.info("=" * 80)
 
         trainer.train()
 
         final_model_path = run_paths.final_model_dir
-        print(f"\nSaving final model to {final_model_path}...")
+        logger.info("Saving final model to %s", final_model_path)
         final_model_path.parent.mkdir(parents=True, exist_ok=True)
         trainer.save_model(str(final_model_path))
         processors.eval.save_pretrained(str(final_model_path))
-        print("Training complete.")
+        logger.info("Training complete.")
 
     # ------------------------------------------------------------------
     # Builders
@@ -73,21 +76,21 @@ class TrainerRunner(BaseRunner):
         dfine_cfg = self.config.dfine.model_dump()
         image_size = self.config.data.image_size
 
-        print("\nInitializing model...")
+        logger.info("Initializing model...")
         factory = ModelFactory.from_config(model_cfg, dfine_cfg, image_size=image_size)
         artifacts = factory.build()
         model = artifacts.model
         processor = artifacts.processor
 
         param_info = get_trainable_parameters(model)
-        print(f"Total parameters: {param_info['total']:,}")
-        print(f"Trainable parameters: {param_info['trainable']:,}")
-        print(f"Frozen parameters: {param_info['frozen']:,}")
-        print(f"Trainable: {param_info['trainable_percent']:.2f}%")
+        logger.info("Total parameters: %s", f"{param_info['total']:,}")
+        logger.info("Trainable parameters: %s", f"{param_info['trainable']:,}")
+        logger.info("Frozen parameters: %s", f"{param_info['frozen']:,}")
+        logger.info("Trainable: %.2f%%", param_info["trainable_percent"])
 
         if model_cfg.pretrained_checkpoint:
             checkpoint_path = model_cfg.pretrained_checkpoint
-            print(f"\nLoading pretrained checkpoint: {checkpoint_path}")
+            logger.info("Loading pretrained checkpoint: %s", checkpoint_path)
             checkpoint = torch.load(checkpoint_path, map_location="cpu")
             model.load_state_dict(checkpoint, strict=False)
 
@@ -95,11 +98,11 @@ class TrainerRunner(BaseRunner):
         return model, processors
 
     def _build_datasets(self, processors: ProcessorBundle):
-        print("\nPreparing datasets...")
+        logger.info("Preparing datasets...")
         train_dataset, val_dataset, class_labels = super()._build_datasets(processors)
-        print(f"Train samples: {len(train_dataset)}")
-        print(f"Val samples: {len(val_dataset)}")
-        print(f"Classes: {class_labels}")
+        logger.info("Train samples: %s", len(train_dataset))
+        logger.info("Val samples: %s", len(val_dataset))
+        logger.info("Classes: %s", class_labels)
         return train_dataset, val_dataset, class_labels
 
     def _build_training_args(self, model) -> tuple[TrainingArguments, list, RunPaths]:

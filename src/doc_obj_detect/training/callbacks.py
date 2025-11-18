@@ -1,6 +1,10 @@
 """Custom Trainer callbacks used by the training runner."""
 
+import logging
+
 from transformers import TrainerCallback
+
+logger = logging.getLogger(__name__)
 
 
 class UnfreezeBackboneCallback(TrainerCallback):
@@ -33,6 +37,6 @@ class UnfreezeBackboneCallback(TrainerCallback):
             for param in backbone.parameters():
                 param.requires_grad = True
 
-            print(f"[Callback] Unfroze backbone at step {state.global_step}")
+            logger.info("[Callback] Unfroze backbone at step %s", state.global_step)
             self._done = True
         return control

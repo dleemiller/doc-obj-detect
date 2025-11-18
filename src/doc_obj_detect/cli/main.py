@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import logging
 
 from doc_obj_detect.data.datasets import DatasetLoader
 from doc_obj_detect.training import DistillRunner, EvaluatorRunner, TrainerRunner
 from doc_obj_detect.visualize import visualize_augmentations
 
+logger = logging.getLogger(__name__)
+
 
 def main(argv: list[str] | None = None) -> None:
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     parser = argparse.ArgumentParser(prog="doc-obj-detect", description="Unified CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -103,7 +109,7 @@ def _handle_visualize(args):
 def _handle_dataset_info(args):
     dataset = args.dataset
     cache_dir = args.cache_dir
-    print(f"Loading {dataset} dataset...")
+    logger.info("Loading %s dataset...", dataset)
     if dataset == "publaynet":
         train_ds, labels = DatasetLoader.load_publaynet("train", cache_dir)
         val_ds, _ = DatasetLoader.load_publaynet("val", cache_dir)
@@ -111,10 +117,10 @@ def _handle_dataset_info(args):
         train_ds, labels = DatasetLoader.load_doclaynet("train", cache_dir)
         val_ds, _ = DatasetLoader.load_doclaynet("val", cache_dir)
 
-    print("\nDataset loaded successfully!")
-    print(f"Train samples: {len(train_ds)}")
-    print(f"Val samples: {len(val_ds)}")
-    print(f"Classes: {labels}")
+    logger.info("Dataset loaded successfully!")
+    logger.info("Train samples: %s", len(train_ds))
+    logger.info("Val samples: %s", len(val_ds))
+    logger.info("Classes: %s", labels)
 
 
 if __name__ == "__main__":  # pragma: no cover

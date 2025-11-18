@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from typing import Any
 from doc_obj_detect.data import DatasetFactory, collate_fn
 from doc_obj_detect.metrics import compute_map
 from doc_obj_detect.utils import RunPaths, prepare_run_dirs, setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -108,8 +111,8 @@ class BaseRunner:
     def _prepare_run_paths(self) -> RunPaths:
         run_paths = prepare_run_dirs(self.config.output)
         setup_logging(run_paths.run_name, run_paths.log_dir)
-        print(f"TensorBoard run name: {run_paths.run_name}")
-        print(f"Logs will be saved to: {run_paths.log_dir}")
+        logger.info("TensorBoard run name: %s", run_paths.run_name)
+        logger.info("Logs will be saved to: %s", run_paths.log_dir)
         return run_paths
 
 

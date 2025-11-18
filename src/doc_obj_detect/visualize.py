@@ -1,6 +1,7 @@
 """Visualization utilities for document augmentations."""
 
 import argparse
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,7 @@ from doc_obj_detect.config import AugmentationConfig
 from doc_obj_detect.data.augmentor import AlbumentationsAugmentor
 from doc_obj_detect.data.datasets import DatasetLoader
 
+logger = logging.getLogger(__name__)
 _COLORS = [
     "#FF6B6B",
     "#4ECDC4",
@@ -49,7 +51,7 @@ def visualize_augmentations(
     augmentor = AlbumentationsAugmentor(aug_config)
     transform = augmentor.build_transform(batch_scale=512)
 
-    print(f"Generating {num_samples} augmentation samples...")
+    logger.info("Generating %s augmentation samples...", num_samples)
     for idx in range(num_samples):
         sample = dataset[idx]
         image = sample["image"]
@@ -76,9 +78,9 @@ def visualize_augmentations(
         comparison = _compose_side_by_side(original_with_boxes, augmented_with_boxes)
         output_file = output_path / f"sample_{idx:02d}.png"
         comparison.save(output_file)
-        print(f"Saved: {output_file}")
+        logger.info("Saved: %s", output_file)
 
-    print(f"\nSamples saved to {output_path}")
+    logger.info("Samples saved to %s", output_path)
 
 
 def _draw_bboxes(
@@ -145,6 +147,9 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 def main() -> None:
     """CLI entry point for augmentation visualization."""
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     parser = argparse.ArgumentParser(description="Visualize document augmentations.")
     parser.add_argument(
         "dataset",

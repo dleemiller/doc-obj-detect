@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 from transformers import AutoImageProcessor, DFineConfig, DFineForObjectDetection
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -95,9 +98,10 @@ class ModelFactory:
                     size={"height": self.image_size, "width": self.image_size},
                 )
                 if processor_id != self.processor_candidates[0]:
-                    print(
-                        f"[ModelFactory] Falling back to {processor_id} for image processing "
-                        f"(preferred {self.processor_candidates[0]} unavailable)."
+                    logger.warning(
+                        "Falling back to %s for image processing (preferred %s unavailable).",
+                        processor_id,
+                        self.processor_candidates[0],
                     )
                 return processor
             except OSError as error:  # keep trying fallbacks
