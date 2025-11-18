@@ -2,35 +2,22 @@
 
 from __future__ import annotations
 
-import copy
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from transformers import DFineForObjectDetection, EarlyStoppingCallback, TrainingArguments
 
 from doc_obj_detect.config import DistillConfig, load_distill_config
-from doc_obj_detect.data import DatasetFactory, collate_fn
-from doc_obj_detect.metrics import compute_map
+from doc_obj_detect.data import collate_fn
 from doc_obj_detect.models import ModelFactory
+from doc_obj_detect.training.base_runner import BaseRunner, ProcessorBundle
 from doc_obj_detect.training.distillation import DistillationTrainer
-from doc_obj_detect.utils import prepare_run_dirs, setup_logging
 
 
-@dataclass
-class ProcessorBundle:
-    train: Any
-    eval: Any
-
-
-class DistillRunner:
+class DistillRunner(BaseRunner):
     """Train a student model using a frozen teacher checkpoint."""
 
     def __init__(self, config: DistillConfig, config_path: str | Path | None = None) -> None:
-        self.config = config
-        self.config_path = Path(config_path) if config_path else None
-        self._aug_config = config.augmentation.model_dump() if config.augmentation else None
-        self._detector_stride = max(config.dfine.feat_strides)
+        super().__init__(config, config_path)
 
     @classmethod
     def from_config(cls, config_path: str | Path) -> DistillRunner:
@@ -38,8 +25,7 @@ class DistillRunner:
         return cls(cfg, config_path)
 
     def run(self) -> None:
-        run_paths = prepare_run_dirs(self.config.output)
-        setup_logging(run_paths.run_name, run_paths.log_dir)
+        run_paths = self._prepare_run_paths()
 
         student_model, processors = self._build_student_model()
         teacher_model = DFineForObjectDetection.from_pretrained(self.config.teacher.checkpoint)
@@ -78,56 +64,17 @@ class DistillRunner:
             self.config.model, dfine_cfg, self.config.data.image_size
         )
         artifacts = factory.build()
-        processor = artifacts.processor
+        processors = self._prepare_processors(artifacts.processor)
+        return artifacts.model, processors
 
-        train_processor = processor
-        train_processor.do_resize = False
-        train_processor.do_pad = True
-
-        eval_processor = copy.deepcopy(processor)
-        eval_processor.do_resize = True
-        eval_processor.do_pad = True
-        eval_processor.size = self._build_eval_size()
-
-        return artifacts.model, ProcessorBundle(train=train_processor, eval=eval_processor)
-
-    def _build_eval_size(self):
-        if self._aug_config and self._aug_config.get("multi_scale_sizes"):
-            shortest = max(self._aug_config["multi_scale_sizes"])
-        else:
-            shortest = self.config.data.image_size
-        size = {"shortest_edge": shortest}
-        if self._aug_config and self._aug_config.get("max_long_side"):
-            size["longest_edge"] = self._aug_config["max_long_side"]
-        return size
-
-    def _build_datasets(self, processors):
-        data_cfg = self.config.data
-        train_factory = DatasetFactory(
-            dataset_name=data_cfg.dataset,
-            image_processor=processors.train,
-            pad_stride=self._detector_stride,
-            cache_dir=data_cfg.cache_dir,
-            augmentation_config=self._aug_config,
-        )
-        train_dataset, _ = train_factory.build(split=data_cfg.train_split, apply_augmentation=True)
-
-        eval_factory = DatasetFactory(
-            dataset_name=data_cfg.dataset,
-            image_processor=processors.eval,
-            pad_stride=self._detector_stride,
-            cache_dir=data_cfg.cache_dir,
-            augmentation_config=None,
-        )
-        val_dataset, class_labels = eval_factory.build(
-            split=data_cfg.val_split,
-            max_samples=data_cfg.max_eval_samples,
-            apply_augmentation=False,
-        )
+    def _build_datasets(self, processors: ProcessorBundle):
+        print("\nPreparing datasets...")
+        train_dataset, val_dataset, class_labels = super()._build_datasets(processors)
+        print(f"Train samples: {len(train_dataset)}")
+        print(f"Val samples: {len(val_dataset)}")
         return train_dataset, val_dataset, class_labels
 
     def _build_training_args(self, run_paths):
-        data_cfg = self.config.data
         training_config_dict = self.config.training.model_dump()
         early_stopping_patience = training_config_dict.pop("early_stopping_patience", None)
         training_args = TrainingArguments(
@@ -136,29 +83,15 @@ class DistillRunner:
             logging_dir=str(run_paths.log_dir),
             report_to=["tensorboard"],
             remove_unused_columns=False,
-            dataloader_num_workers=data_cfg.num_workers,
-            per_device_train_batch_size=data_cfg.batch_size,
-            per_device_eval_batch_size=data_cfg.batch_size,
+            dataloader_num_workers=self.config.data.num_workers,
+            per_device_train_batch_size=self.config.data.batch_size,
+            per_device_eval_batch_size=self.config.data.batch_size,
             **training_config_dict,
         )
         callbacks = []
         if early_stopping_patience is not None:
             callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
         return training_args, callbacks
-
-    def _build_metrics_fn(self, eval_processor, class_labels):
-        data_cfg = self.config.data
-
-        def compute_metrics_fn(eval_pred):
-            return compute_map(
-                eval_pred=eval_pred,
-                image_processor=eval_processor,
-                id2label=class_labels,
-                threshold=0.0,
-                max_eval_images=data_cfg.max_eval_samples,
-            )
-
-        return compute_metrics_fn
 
 
 __all__ = ["DistillRunner"]

@@ -134,7 +134,7 @@ def test_trainer_runner_wires_dependencies(monkeypatch, tmp_path):
     config = build_train_config(tmp_path)
 
     monkeypatch.setattr("doc_obj_detect.training.runner.ModelFactory", DummyModelFactory)
-    monkeypatch.setattr("doc_obj_detect.training.runner.DatasetFactory", DummyDatasetFactory)
+    monkeypatch.setattr("doc_obj_detect.training.base_runner.DatasetFactory", DummyDatasetFactory)
     monkeypatch.setattr("doc_obj_detect.training.runner.SplitLRTrainer", DummyTrainer)
     monkeypatch.setattr(
         "doc_obj_detect.training.runner.get_trainable_parameters",

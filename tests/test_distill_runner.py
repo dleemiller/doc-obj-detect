@@ -120,9 +120,7 @@ def test_distill_runner_wires_trainer(monkeypatch, tmp_path):
             return self
 
     monkeypatch.setattr("doc_obj_detect.training.distill_runner.ModelFactory", DummyFactory)
-    monkeypatch.setattr(
-        "doc_obj_detect.training.distill_runner.DatasetFactory", DummyDatasetFactory
-    )
+    monkeypatch.setattr("doc_obj_detect.training.base_runner.DatasetFactory", DummyDatasetFactory)
     monkeypatch.setattr("doc_obj_detect.training.distill_runner.DistillationTrainer", DummyTrainer)
     monkeypatch.setattr(
         "doc_obj_detect.training.distill_runner.DFineForObjectDetection",
