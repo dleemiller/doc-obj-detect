@@ -35,11 +35,7 @@ cu128 = [
 ]
 
 [project.scripts]
-preprocess-data = "doc_obj_detect.cli:preprocess_cli"
-train = "doc_obj_detect.train:main"
-distill = "doc_obj_detect.distill:main"
-evaluate = "doc_obj_detect.evaluate:main"
-visualize-augmentations = "doc_obj_detect.visualize:main"
+doc-obj-detect = "doc_obj_detect.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

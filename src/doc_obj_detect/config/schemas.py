@@ -1,9 +1,6 @@
 """Configuration schemas using Pydantic for validation."""
 
-from pathlib import Path
-
-import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ModelConfig(BaseModel):
@@ -205,6 +202,11 @@ class TrainingConfig(BaseModel):
     metric_for_best_model: str = Field(default="eval_loss", description="Metric for best model")
     greater_is_better: bool = Field(default=False, description="Whether higher metric is better")
     push_to_hub: bool = Field(default=False, description="Push model to HuggingFace Hub")
+    early_stopping_patience: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional patience for EarlyStoppingCallback",
+    )
 
     model_config = {"extra": "allow"}  # Allow additional TrainingArguments params
 
@@ -226,11 +228,24 @@ class TrainConfig(BaseModel):
     """Complete training configuration (D-FINE architecture)."""
 
     model: ModelConfig
-    dfine: DFineConfig
+    dfine: DFineConfig | None = None
+    detr: DFineConfig | None = None
     data: DataConfig
     augmentation: AugmentationConfig | None = None
     training: TrainingConfig
     output: OutputConfig
+
+    @model_validator(mode="after")
+    def ensure_dfine(self) -> "TrainConfig":
+        dfine = self.dfine
+        detr = self.detr
+        if dfine is None and detr is None:
+            raise ValueError("Either 'dfine' or 'detr' section must be provided in the config.")
+        if dfine is None:
+            self.dfine = detr
+        if self.detr is None:
+            self.detr = self.dfine
+        return self
 
 
 class DistillationConfig(BaseModel):
@@ -269,51 +284,14 @@ class TeacherConfig(BaseModel):
     detector: str = Field(description="Teacher detector type")
 
 
-class StudentConfig(BaseModel):
-    """Student model configuration for distillation."""
-
-    backbone: str = Field(description="Student backbone model name")
-    detector: str = Field(description="Student detector type")
-    num_classes: int = Field(gt=0, description="Number of classes")
-
-
 class DistillConfig(BaseModel):
     """Complete distillation configuration."""
 
     teacher: TeacherConfig
-    student: StudentConfig
+    model: ModelConfig
+    dfine: DFineConfig
     distillation: DistillationConfig
     data: DataConfig
     augmentation: AugmentationConfig | None = None
     training: TrainingConfig
     output: OutputConfig
-
-
-def load_train_config(config_path: str | Path) -> TrainConfig:
-    """Load and validate training configuration.
-
-    Args:
-        config_path: Path to YAML config file
-
-    Returns:
-        Validated TrainConfig object
-    """
-    with open(config_path) as f:
-        config_dict = yaml.safe_load(f)
-
-    return TrainConfig(**config_dict)
-
-
-def load_distill_config(config_path: str | Path) -> DistillConfig:
-    """Load and validate distillation configuration.
-
-    Args:
-        config_path: Path to YAML config file
-
-    Returns:
-        Validated DistillConfig object
-    """
-    with open(config_path) as f:
-        config_dict = yaml.safe_load(f)
-
-    return DistillConfig(**config_dict)

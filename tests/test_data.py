@@ -7,15 +7,9 @@ import pytest
 import torch
 from PIL import Image
 
-from doc_obj_detect.data import (
-    DOCLAYNET_CLASSES,
-    PUBLAYNET_CLASSES,
-    apply_augmentations,
-    collate_fn,
-    format_annotations_for_detr,
-    get_augmentation_transform,
-    prepare_dataset_for_training,
-)
+from doc_obj_detect.data.augmentor import AlbumentationsAugmentor
+from doc_obj_detect.data.constants import DOCLAYNET_CLASSES, PUBLAYNET_CLASSES
+from doc_obj_detect.data.pipeline import DatasetFactory, collate_fn
 from doc_obj_detect.visualize import visualize_augmentations
 
 
@@ -23,15 +17,6 @@ def test_class_labels():
     """Test class labels are defined correctly."""
     assert len(PUBLAYNET_CLASSES) == 5
     assert len(DOCLAYNET_CLASSES) == 11
-
-
-def test_format_annotations_for_detr():
-    """Test COCO annotation formatting."""
-    annotations = [{"bbox": [10, 20, 100, 50], "category_id": 0, "area": 5000}]
-    result = format_annotations_for_detr(123, annotations)
-
-    assert result["image_id"] == 123
-    assert result["annotations"] == annotations
 
 
 def test_apply_augmentations():
@@ -42,14 +27,15 @@ def test_apply_augmentations():
     ]
 
     examples = {"image": [dummy_image], "annotations": [dummy_annotations]}
-    transform = get_augmentation_transform({"rotate_limit": 5})
-    result = apply_augmentations(examples, transform)
+    augmentor = AlbumentationsAugmentor({"rotate_limit": 5})
+    result = augmentor.augment(examples)
 
     # Check structure maintained and area recalculated
     assert len(result["image"]) == 1
     assert len(result["annotations"]) == 1
-    result_bbox = result["annotations"][0][0]["bbox"]
-    result_area = result["annotations"][0][0]["area"]
+    result_ann = result["annotations"][0]
+    result_bbox = result_ann["bbox"][0]
+    result_area = result_ann["area"][0]
     assert result_area == result_bbox[2] * result_bbox[3]
 
 
@@ -75,26 +61,37 @@ def test_collate_fn():
     assert len(result["labels"]) == 2
 
 
-@patch("doc_obj_detect.data.load_publaynet")
-def test_prepare_dataset_for_training(mock_load):
-    """Test dataset preparation."""
+@patch("doc_obj_detect.data.datasets.DatasetLoader.load_publaynet")
+def test_dataset_factory_build(mock_load):
+    """Test dataset preparation via factory."""
     mock_dataset = MagicMock()
     mock_dataset.with_transform.return_value = mock_dataset
     mock_load.return_value = (mock_dataset, PUBLAYNET_CLASSES)
 
-    dataset, labels = prepare_dataset_for_training("publaynet", "train", MagicMock())
+    factory = DatasetFactory(
+        dataset_name="publaynet",
+        image_processor=MagicMock(),
+        pad_stride=32,
+        cache_dir=None,
+        augmentation_config=None,
+    )
+    dataset, labels = factory.build(split="train", apply_augmentation=False)
 
     assert labels == PUBLAYNET_CLASSES
     assert mock_dataset.with_transform.called
 
 
-def test_prepare_dataset_invalid_name():
+def test_dataset_factory_invalid_name():
     """Test invalid dataset name raises error."""
     with pytest.raises(ValueError, match="Unknown dataset"):
-        prepare_dataset_for_training("invalid", "train", MagicMock())
+        DatasetFactory(
+            dataset_name="invalid",
+            image_processor=MagicMock(),
+            pad_stride=32,
+        ).build(split="train")
 
 
-@patch("doc_obj_detect.visualize.load_publaynet")
+@patch("doc_obj_detect.visualize.DatasetLoader.load_publaynet")
 def test_visualize_augmentations(mock_load, tmp_path):
     """Test augmentation visualization."""
     # Create mock dataset

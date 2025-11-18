@@ -17,7 +17,7 @@ def test_all_config_files_load_successfully():
         if "distill" in config_file.name:
             config = load_distill_config(config_file)
             assert config.teacher is not None
-            assert config.student is not None
+            assert config.model is not None
         else:
             config = load_train_config(config_file)
             assert config.model is not None
