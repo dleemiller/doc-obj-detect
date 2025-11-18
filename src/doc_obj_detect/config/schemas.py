@@ -89,11 +89,17 @@ class DataConfig(BaseModel):
     train_split: str = Field(default="train", description="Training data split")
     val_split: str = Field(default="val", description="Validation data split")
     test_split: str | None = Field(default=None, description="Test data split")
-    image_size: int = Field(default=512, gt=0, description="Input image size")
-    batch_size: int = Field(default=8, gt=0, description="Batch size per device")
-    num_workers: int = Field(default=4, ge=0, description="Number of data loader workers")
+    image_size: int = Field(
+        default=512, ge=64, le=4096, description="Input image size (short side for square mode)"
+    )
+    batch_size: int = Field(default=8, gt=0, le=1024, description="Batch size per device")
+    num_workers: int = Field(
+        default=4, ge=0, le=128, description="Number of data loader workers (total per process)"
+    )
     cache_dir: str | None = Field(default=None, description="Dataset cache directory")
-    max_eval_samples: int = Field(default=2000, ge=0)
+    max_eval_samples: int = Field(
+        default=2000, ge=0, le=200_000, description="Maximum samples to evaluate per run"
+    )
 
     @field_validator("dataset")
     @classmethod
@@ -157,6 +163,8 @@ class AugmentationConfig(BaseModel):
     )
     max_long_side: int | None = Field(
         default=960,
+        ge=64,
+        le=8192,
         description="Maximum allowed long-side size when aspect-preserving resize is enabled.",
     )
     force_square_resize: bool = Field(
@@ -176,25 +184,42 @@ class AugmentationConfig(BaseModel):
 
     model_config = {"extra": "allow"}  # Allow additional augmentation params
 
+    @field_validator("multi_scale_sizes")
+    @classmethod
+    def validate_multi_scale_sizes(cls, v: list[int]) -> list[int]:
+        if not v:
+            raise ValueError("multi_scale_sizes must contain at least one size.")
+        for size in v:
+            if size < 64 or size > 4096:
+                raise ValueError("multi_scale_sizes entries must be between 64 and 4096 pixels.")
+        return v
+
+    @model_validator(mode="after")
+    def ensure_long_side(self) -> "AugmentationConfig":
+        max_scale = max(self.multi_scale_sizes) if self.multi_scale_sizes else 0
+        if self.max_long_side is not None and self.max_long_side < max_scale:
+            raise ValueError("max_long_side must be >= largest entry in multi_scale_sizes.")
+        return self
+
 
 class TrainingConfig(BaseModel):
     """Training configuration - maps to HuggingFace TrainingArguments."""
 
-    num_train_epochs: int = Field(gt=0, description="Number of training epochs")
-    learning_rate: float = Field(gt=0, description="Learning rate")
-    weight_decay: float = Field(ge=0, description="Weight decay")
+    num_train_epochs: int = Field(gt=0, le=1000, description="Number of training epochs")
+    learning_rate: float = Field(gt=0, le=1.0, description="Learning rate")
+    weight_decay: float = Field(ge=0, le=1.0, description="Weight decay")
     # warmup_steps: int | None = Field(default=None, ge=0, description="Warmup steps (optional)")
     warmup_ratio: float | None = Field(
         default=None, ge=0, le=1, description="Warmup ratio (optional, alternative to warmup_steps)"
     )
     gradient_accumulation_steps: int = Field(
-        default=1, gt=0, description="Gradient accumulation steps"
+        default=1, gt=0, le=8192, description="Gradient accumulation steps"
     )
     bf16: bool = Field(default=False, description="Use bfloat16 mixed precision")
     fp16: bool = Field(default=False, description="Use float16 mixed precision")
-    save_steps: int = Field(gt=0, description="Save checkpoint every N steps")
-    eval_steps: int = Field(gt=0, description="Evaluate every N steps")
-    logging_steps: int = Field(gt=0, description="Log every N steps")
+    save_steps: int = Field(gt=0, le=1_000_000, description="Save checkpoint every N steps")
+    eval_steps: int = Field(gt=0, le=1_000_000, description="Evaluate every N steps")
+    logging_steps: int = Field(gt=0, le=1_000_000, description="Log every N steps")
     eval_strategy: str = Field(default="steps", description="Evaluation strategy")
     save_strategy: str = Field(default="steps", description="Save strategy")
     save_total_limit: int = Field(default=3, gt=0, description="Maximum checkpoints to keep")
@@ -252,7 +277,9 @@ class DistillationConfig(BaseModel):
     """Distillation-specific configuration."""
 
     loss_type: str = Field(description="Distillation loss type: 'kl' or 'mse'")
-    temperature: float = Field(default=3.0, gt=0, description="Temperature for KL divergence")
+    temperature: float = Field(
+        default=3.0, gt=0, le=10.0, description="Temperature for KL divergence"
+    )
     alpha: float = Field(default=0.7, ge=0.0, le=1.0, description="Weight for distillation loss")
     beta: float = Field(default=0.3, ge=0.0, le=1.0, description="Weight for ground truth loss")
     distill_features: bool = Field(default=False, description="Distill intermediate features")
