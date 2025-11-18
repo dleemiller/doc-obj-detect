@@ -1,6 +1,6 @@
 # Document Layout Analysis with D-FINE
 
-Modern document understanding needs both page-level accuracy and production-ready throughput. This project trains a ConvNeXt-DINOv3 backbone paired with the D-FINE detector, then fine-tunes on DocLayNet and distills into lighter RT-DETR variants. All tooling is driven through `uv` so dependencies stay reproducible and CUDA wheels are easy to swap.
+Modern document understanding needs both page-level accuracy and production-ready throughput. This project trains a ConvNeXt-DINOv3 backbone paired with the D-FINE detector, then fine-tunes on DocLayNet and distills into lighter D-FINE variants (ConvNeXt Base/Small/Tiny). All tooling is driven through `uv` so dependencies stay reproducible and CUDA wheels are easy to swap.
 
 ## Highlights
 - **Architecture:** ConvNeXt Large DINOv3 backbone feeding D-FINE (multi-scale encoder, hybrid matching) with 300 object queries.
