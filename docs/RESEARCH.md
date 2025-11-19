@@ -478,7 +478,7 @@ Typical: λ_dfl = 1.5, λ_giou = 2.0, λ_l1 = 5.0
 
 **Encoder:**
 * Multi-scale deformable attention (like RT-DETR)
-* Processes 3 feature levels from ConvNeXt: {C3, C4, C5} at strides {8, 16, 32}
+* Processes 4 feature levels from ConvNeXt: {C2, C3, C4, C5} at strides {4, 8, 16, 32}
 * 1 encoder layer (lightweight, most computation in decoder)
 * Hidden dim: 256
 
@@ -557,16 +557,24 @@ D-FINE-X with Objects365 pretraining achieves **59.3 AP** - competitive with muc
 * Pretrained on 1.689B images via self-supervised distillation
 
 **Feature extraction:**
-* Extract from stages 1, 2, 3 (C2, C3, C4, C5 hierarchy)
-* For D-FINE, we use **3 levels:** C3, C4, C5 at strides {8, 16, 32}
-  * C3: 384 channels, stride 8, ~80×80 spatial (for 640px input)
+* Extract from stages 0, 1, 2, 3 (ConvNeXt hierarchy)
+* For D-FINE, we use **4 levels:** C2, C3, C4, C5 at strides {4, 8, 16, 32}
+  * C2: 192 channels, stride 4, ~160×160 spatial (for 640px input)
+  * C3: 384 channels, stride 8, ~80×80 spatial
   * C4: 768 channels, stride 16, ~40×40 spatial
   * C5: 1536 channels, stride 32, ~20×20 spatial
 
-**Why 3 levels?**
-* Balances coverage of small (C3), medium (C4), large (C5) objects
-* Fewer levels than 4-5 reduces computation
-* Documents have less scale variation than COCO (fewer tiny objects, fewer huge objects)
+**Why 4 levels (not D-FINE's default 3)?**
+* **D-FINE default:** 3 levels {8, 16, 32} optimized for COCO dataset (natural images)
+* **Documents have many small critical objects:** Page numbers, footnotes, formulas, section numbers
+  * Page numbers: ~10-20 px tall (need stride 4 for detection)
+  * Footnote markers: ~8-15 px (barely visible at stride 8)
+  * Formula symbols: ~15-25 px (benefit from fine resolution)
+* **Deformable DETR uses 4:** Original Deformable DETR paper (D-FINE's foundation) uses 4 levels
+* **Small object mAP critical:** Unlike COCO where small objects are often background, document small objects carry semantic importance
+* **Fine-grained boundaries:** Column edges, table borders need sub-pixel precision (stride 4 = 4×4 px receptive field)
+* **Compute budget allows:** 96GB GPU can handle the +25% compute cost for 4 levels
+* **Expected gains:** +1.5 to +3.0 mAP-small, +0.5 to +1.0 overall mAP based on COCO benchmarks
 
 **Backbone training:**
 * **Split learning rate:** Backbone LR = Head LR / 10
@@ -987,12 +995,17 @@ Hybrid loss prevents student from drifting away from ground truth.
 
 Based on COCO distillation benchmarks:
 
-| Model              | Params | FLOPs | Latency (A100) | Expected mAP Drop |
-|--------------------|--------|-------|----------------|-------------------|
-| Teacher (CNX-L)    | 198M   | 34G   | ~50ms          | 0% (baseline)     |
-| Student (CNX-B)    | 89M    | 15G   | ~30ms          | -2 to -3 mAP      |
-| Student (CNX-S)    | 50M    | 9G    | ~20ms          | -4 to -5 mAP      |
-| Student (CNX-Tiny) | 28M    | 5G    | ~15ms          | -6 to -8 mAP      |
+| Model              | Params | FLOPs | Latency (A100) | Expected mAP Drop | Feature Levels    |
+|--------------------|--------|-------|----------------|-------------------|-------------------|
+| Teacher (CNX-L)    | 198M   | 34G   | ~50ms          | 0% (baseline)     | 4 {4,8,16,32}     |
+| Student (CNX-B)    | 89M    | 15G   | ~30ms          | -2 to -3 mAP      | 4 {4,8,16,32}     |
+| Student (CNX-S)    | 50M    | 9G    | ~20ms          | -4 to -5 mAP      | 3 or 4            |
+| Student (CNX-Tiny) | 28M    | 5G    | ~15ms          | -6 to -8 mAP      | 3 {8,16,32}       |
+
+**Feature level recommendations by model size:**
+* **Large/Base:** Use 4 levels {4, 8, 16, 32} - maximize accuracy, have compute budget
+* **Small:** Use 4 levels for teacher matching, consider 3 for production (speed vs accuracy trade-off)
+* **Tiny:** Use 3 levels {8, 16, 32} - memory/speed critical, accept small object mAP loss
 
 With good distillation, students retain 92-96% of teacher performance while being 2-4× faster.
 

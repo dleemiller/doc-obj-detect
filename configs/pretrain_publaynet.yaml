@@ -8,12 +8,14 @@ model:
   freeze_backbone: false  # Train end-to-end from start with split LR
 
 dfine:
-  # Backbone feature extraction (ConvNeXt stages 1, 2, 3)
-  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-L channel dimensions
-  feat_strides: [8, 16, 32]  # Feature pyramid strides
-  num_feature_levels: 3  # Multi-scale levels
+  # Backbone feature extraction (ConvNeXt stages 0, 1, 2, 3)
+  # Using 4 levels for better small object detection (page numbers, footnotes, formulas)
+  # D-FINE default is 3 levels {8, 16, 32}, but we use 4 {4, 8, 16, 32} for documents
+  encoder_in_channels: [192, 384, 768, 1536]  # ConvNeXt-L channel dimensions
+  feat_strides: [4, 8, 16, 32]  # Feature pyramid strides
+  num_feature_levels: 4  # D-FINE standard: 3, but 4 levels needed for small objects in documents
   backbone_kwargs:
-    out_indices: [1, 2, 3]  # Extract from stages 1, 2, 3
+    out_indices: [0, 1, 2, 3]  # Extract from stages 0, 1, 2, 3 (C2, C3, C4, C5)
 
   # Encoder configuration
   encoder_hidden_dim: 256
