@@ -31,9 +31,14 @@ class SplitLRTrainer(Trainer):
 
         optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args)
         base_lr = self.args.learning_rate
+        # ConvNeXt-Large DINOv3 (198M params) vs HGNetV2 (4-40M params):
+        # D-FINE-X (40M backbone): 0.01 multiplier
+        # D-FINE-L (18M backbone): 0.05 multiplier
+        # ConvNeXt-L is 5-10× larger + DINOv3 pretrained on 1.7B images
+        # Using 0.01 (conservative) to preserve strong DINOv3 representations
         optimizer_grouped_parameters = [
             {"params": other_params, "lr": base_lr},
-            {"params": backbone_params, "lr": base_lr * 0.1},
+            {"params": backbone_params, "lr": base_lr * 0.01},  # 2.5e-6 for base_lr=2.5e-4
         ]
 
         self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)

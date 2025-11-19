@@ -47,7 +47,7 @@ data:
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
   image_size: 512  # Standard document detection size
-  batch_size: 20  # Match D-FINE defaults and SOTA paper (16-32 range)
+  batch_size: 16  # Half of D-FINE standard (32) due to 4 feature levels (C2 adds ~25% memory)
   max_eval_samples: 1000
   num_workers: 4  # Reduced to avoid "too many open files"
 
@@ -85,25 +85,28 @@ training:
   # Cosine LR provides natural "precision tail" for final mAP gains
   num_train_epochs: 12
 
-  # Learning rates (split LR: backbone 1/10 of head)
-  # Reduced from 2e-4 to address high gradient norms (89-175)
-  # Lower LR should reduce gradient magnitudes and improve stability
-  # lr_head = 1e-4
-  # lr_backbone = 1e-4 * 0.1 = 1e-5
-  learning_rate: 2.0e-5  # Head LR (backbone will be 1/10)
+  # Learning rates (D-FINE-X/L defaults, scaled for batch size 16)
+  # D-FINE uses batch_size=32 with base_lr=2.5e-4
+  # We use batch_size=16, so linear scaling: base_lr = 2.5e-4 / 2 = 1.25e-4
+  # D-FINE pattern: larger backbone → lower multiplier (S: 0.5, M: 0.1, L: 0.05, X: 0.01)
+  # ConvNeXt-Large DINOv3: 198M params (5× larger than D-FINE-X's 40M HGNetV2-B5)
+  # Using 0.01 multiplier (matches D-FINE-X) to preserve strong DINOv3 representations
+  # lr_head = 1.25e-4
+  # lr_backbone = 1.25e-4 * 0.01 = 1.25e-6
+  learning_rate: 1.25e-4  # Head LR (D-FINE-X/L 2.5e-4 scaled for batch_size 16)
 
   # Optimizer settings
-  weight_decay: 0.05  # AdamW weight decay
+  weight_decay: 1.25e-4  # D-FINE-X/L standard (was 0.05, which is 400x too large!)
 
   # Warmup and scheduling
   lr_scheduler_type: "cosine_with_min_lr"
   warmup_ratio: 0.08  # 8% of total training (was 5000 steps, too long for rapid convergence)
   lr_scheduler_kwargs:
-    min_lr: 2.0e-6  # Min LR = base_lr / 10 (precision tail for final mAP gains)
+    min_lr: 1.25e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
 
   # Gradient settings
   gradient_accumulation_steps: 1
-  max_grad_norm: 1.0  # Gradient clipping (relaxed from 0.5 based on observed norms of 89-175)
+  max_grad_norm: 1.0  # Gradient clipping for stability
 
   # Mixed precision
   bf16: true

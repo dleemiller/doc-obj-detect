@@ -577,10 +577,14 @@ D-FINE-X with Objects365 pretraining achieves **59.3 AP** - competitive with muc
 * **Expected gains:** +1.5 to +3.0 mAP-small, +0.5 to +1.0 overall mAP based on COCO benchmarks
 
 **Backbone training:**
-* **Split learning rate:** Backbone LR = Head LR / 10
-  * Head (D-FINE): 1e-4
-  * Backbone (ConvNeXt): 1e-5
-* Rationale: DINOv3 features are already excellent; small adjustments sufficient
+* **Split learning rate:** Backbone LR = Head LR × 0.01 (conservative for DINOv3)
+  * Head (D-FINE): 2.5e-4
+  * Backbone (ConvNeXt-L): 2.5e-6 (0.01× multiplier)
+* **Rationale for low multiplier:**
+  * ConvNeXt-Large: 198M params (5× larger than D-FINE-X's 40M HGNetV2-B5)
+  * DINOv3 pretrained on 1.7B images (vs HGNetV2's ~14M ImageNet images)
+  * D-FINE pattern: larger backbone → lower multiplier (S: 0.5, M: 0.1, L: 0.05, X: 0.01)
+  * Features already near-optimal; minimal adjustment prevents catastrophic forgetting
 * Full fine-tuning (no freezing) - DINOv3 pretraining is stable enough
 
 ### 6.2 D-FINE Head Configuration
