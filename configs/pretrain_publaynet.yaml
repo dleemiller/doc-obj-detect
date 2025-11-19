@@ -51,7 +51,7 @@ data:
 
 augmentation:
   # Multi-scale training for better scale invariance and small object detection
-  multi_scale_sizes: [480, 512, 544, 576, 608, 640]
+  multi_scale_sizes: [512, 544, 576, 608, 640]
   max_long_side: 928
   rotate_limit: 5
   rotate_prob: 0.5
@@ -88,7 +88,7 @@ training:
   # Lower LR should reduce gradient magnitudes and improve stability
   # lr_head = 1e-4
   # lr_backbone = 1e-4 * 0.1 = 1e-5
-  learning_rate: 1.0e-4  # Head LR (backbone will be 1/10)
+  learning_rate: 2.0e-5  # Head LR (backbone will be 1/10)
 
   # Optimizer settings
   weight_decay: 0.05  # AdamW weight decay
@@ -97,7 +97,7 @@ training:
   lr_scheduler_type: "cosine_with_min_lr"
   warmup_ratio: 0.08  # 8% of total training (was 5000 steps, too long for rapid convergence)
   lr_scheduler_kwargs:
-    min_lr: 1.0e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
+    min_lr: 2.0e-6  # Min LR = base_lr / 10 (precision tail for final mAP gains)
 
   # Gradient settings
   gradient_accumulation_steps: 1

@@ -79,7 +79,21 @@ class ModelFactory:
             if not checkpoint_path.exists():
                 raise FileNotFoundError(f"Pretrained checkpoint not found: {checkpoint_path}")
             state_dict = torch.load(checkpoint_path, map_location="cpu")
-            model.load_state_dict(state_dict, strict=False)
+            filtered_state_dict = {}
+            skipped_keys = []
+            model_state = model.state_dict()
+            for key, value in state_dict.items():
+                if key not in model_state:
+                    continue
+                if value.shape != model_state[key].shape:
+                    skipped_keys.append(key)
+                    continue
+                filtered_state_dict[key] = value
+            model.load_state_dict(filtered_state_dict, strict=False)
+            if skipped_keys:
+                logger.info(
+                    "Skipped loading weights for keys due to shape mismatch: %s", skipped_keys
+                )
 
         processor = self._load_processor()
         return ModelArtifacts(model=model, processor=processor)
