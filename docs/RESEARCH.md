@@ -565,12 +565,37 @@ D-FINE-X with Objects365 pretraining achieves **59.3 AP** - competitive with muc
   * C5: 1536 channels, stride 32, ~20×20 spatial
 
 **Why 4 levels (not D-FINE's default 3)?**
+
+![PubLayNet Bbox Distribution](assets/publaynet_bbox_distribution.png)
+*Figure: PubLayNet bounding box distribution showing height concentration at 8-32px and width peak at ~250px*
+
 * **D-FINE default:** 3 levels {8, 16, 32} optimized for COCO dataset (natural images)
-* **Documents have many small critical objects:** Page numbers, footnotes, formulas, section numbers
-  * Page numbers: ~10-20 px tall (need stride 4 for detection)
-  * Footnote markers: ~8-15 px (barely visible at stride 8)
-  * Formula symbols: ~15-25 px (benefit from fine resolution)
-* **Deformable DETR uses 4:** Original Deformable DETR paper (D-FINE's foundation) uses 4 levels
+
+**Empirical validation from PubLayNet data:**
+
+The histogram above shows the actual bbox distribution in PubLayNet training set, revealing critical insights:
+
+| Feature Level | Stride | Receptive Field | Spatial Res (640px) | Optimal Range | PubLayNet Coverage |
+|--------------|--------|----------------|---------------------|---------------|-------------------|
+| **C2** | **4** | 4×4px | 160×160 | 8-32px | **✅ CRITICAL** - captures massive 8-32px height peak (~80k boxes) |
+| C3 | 8 | 8×8px | 80×80 | 16-64px | Captures small element widths, height transition zone |
+| C4 | 16 | 16×16px | 40×40 | 32-128px | **✅ ESSENTIAL** - optimal for ~250px width peak (paragraphs) |
+| C5 | 32 | 32×32px | 20×20 | 64-256px | Handles large text blocks, full-width elements |
+
+**Key findings from the data:**
+* **Heights:** Massive concentration at 8-32px (~80,000 boxes) - requires C2 (stride 4)
+* **Widths:** Bimodal distribution with dominant peak at ~250px - well-served by C4/C5
+* **Small objects critical:** The 8-32px height cluster represents 30-40% of dataset objects
+* **Without C2:** Would miss or poorly detect the single largest object cluster
+
+**Why NOT 5 levels (adding C1 stride 2)?**
+* No objects <8px visible in dataset (C2 already captures smallest objects)
+* 320×320 feature map = 4× memory cost of C2
+* ConvNeXt stage 0 outputs stride 4, not stride 2 (would need extra processing)
+* Diminishing returns for compute cost
+
+**Other rationale:**
+* **Deformable DETR uses 4:** Original paper (D-FINE's foundation) uses 4 levels
 * **Small object mAP critical:** Unlike COCO where small objects are often background, document small objects carry semantic importance
 * **Fine-grained boundaries:** Column edges, table borders need sub-pixel precision (stride 4 = 4×4 px receptive field)
 * **Compute budget allows:** 96GB GPU can handle the +25% compute cost for 4 levels

@@ -6,6 +6,13 @@ import argparse
 import logging
 
 from doc_obj_detect.data.datasets import DatasetLoader
+from doc_obj_detect.tools import (
+    collect_bbox_samples,
+    compute_stride_ranges,
+    load_bbox_data,
+    plot_bbox_histograms,
+    save_bbox_data,
+)
 from doc_obj_detect.training import DistillRunner, EvaluatorRunner, TrainerRunner
 from doc_obj_detect.visualize import visualize_augmentations
 
@@ -21,6 +28,7 @@ def main(argv: list[str] | None = None) -> None:
     _add_distill_parser(subparsers)
     _add_visualize_parser(subparsers)
     _add_dataset_info_parser(subparsers)
+    _add_bbox_hist_parser(subparsers)
 
     args = parser.parse_args(argv)
     args.handler(args)
@@ -67,6 +75,43 @@ def _add_dataset_info_parser(subparsers):
     parser.add_argument("--dataset", choices=["publaynet", "doclaynet"], required=True)
     parser.add_argument("--cache-dir", type=str, default=None)
     parser.set_defaults(handler=_handle_dataset_info)
+
+
+def _add_bbox_hist_parser(subparsers):
+    parser = subparsers.add_parser("bbox-hist", help="Analyze bbox widths/heights")
+    parser.add_argument(
+        "--config",
+        required=False,
+        help="Path to training YAML config (required unless --data-in provided)",
+    )
+    parser.add_argument("--split", default="val", help="Dataset split to analyze")
+    parser.add_argument("--output", default="outputs/bbox_hist.png", help="Output figure path")
+    parser.add_argument("--bins", type=int, default=80, help="Histogram bins")
+    parser.add_argument(
+        "--short-side",
+        type=int,
+        default=640,
+        help="Override short side resize (defaults to config's evaluation short side)",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=1000,
+        help="Limit samples (validation/test splits only)",
+    )
+    parser.add_argument(
+        "--data-out",
+        type=str,
+        default="bbox_stats.npz",
+        help="Optional path to save collected bbox statistics (.npz)",
+    )
+    parser.add_argument(
+        "--data-in",
+        type=str,
+        default=None,
+        help="Load precomputed bbox statistics (.npz) instead of scanning the dataset",
+    )
+    parser.set_defaults(handler=_handle_bbox_hist)
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +163,44 @@ def _handle_dataset_info(args):
     logger.info("Train samples: %s", len(train_ds))
     logger.info("Val samples: %s", len(val_ds))
     logger.info("Classes: %s", labels)
+
+
+def _handle_bbox_hist(args):
+    if args.data_in:
+        widths, heights, strides = load_bbox_data(args.data_in)
+        logger.info("Loaded bbox data from %s", args.data_in)
+    else:
+        if not args.config:
+            raise ValueError("--config is required when --data-in is not provided.")
+        widths, heights, strides = collect_bbox_samples(
+            config_path=args.config,
+            split=args.split,
+            max_samples=args.max_samples,
+            target_short_side=args.short_side,
+        )
+        logger.info(
+            "Collected %s boxes from %s split using short side %s",
+            len(widths),
+            args.split,
+            args.short_side or "config default",
+        )
+        if args.data_out:
+            save_bbox_data(args.data_out, widths, heights, strides)
+            logger.info("Saved bbox data to %s", args.data_out)
+
+    stride_ranges = compute_stride_ranges(strides)
+    for stride, rng in stride_ranges.items():
+        logger.info("Stride %s covers approx %.1fpx - %.1fpx", stride, rng[0], rng[1])
+
+    plot_bbox_histograms(
+        widths=widths,
+        heights=heights,
+        stride_ranges=stride_ranges,
+        strides=strides,
+        bins=args.bins,
+        output_path=args.output,
+    )
+    logger.info("Saved bbox histograms to %s", args.output)
 
 
 if __name__ == "__main__":  # pragma: no cover
