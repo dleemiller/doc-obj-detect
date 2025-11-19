@@ -26,7 +26,9 @@ class ModelFactory:
         num_classes: int,
         *,
         use_pretrained_backbone: bool = True,
+        use_pretrained_head: bool = True,
         freeze_backbone: bool = False,
+        freeze_backbone_epochs: int | None = None,
         image_size: int = 512,
         pretrained_checkpoint: str | None = None,
         processor_candidates: tuple[str, ...] | None = None,
@@ -35,7 +37,9 @@ class ModelFactory:
         self.backbone = backbone
         self.num_classes = num_classes
         self.use_pretrained_backbone = use_pretrained_backbone
+        self.use_pretrained_head = use_pretrained_head
         self.freeze_backbone = freeze_backbone
+        self.freeze_backbone_epochs = freeze_backbone_epochs
         self.image_size = image_size
         self.pretrained_checkpoint = pretrained_checkpoint
         self.processor_candidates = processor_candidates or (
@@ -50,7 +54,9 @@ class ModelFactory:
             backbone=model_cfg.backbone,
             num_classes=model_cfg.num_classes,
             use_pretrained_backbone=model_cfg.use_pretrained_backbone,
+            use_pretrained_head=model_cfg.use_pretrained_head,
             freeze_backbone=model_cfg.freeze_backbone,
+            freeze_backbone_epochs=model_cfg.freeze_backbone_epochs,
             image_size=image_size,
             pretrained_checkpoint=model_cfg.pretrained_checkpoint,
             **dfine_cfg,
@@ -59,6 +65,17 @@ class ModelFactory:
     def build(self) -> ModelArtifacts:
         dfine_kwargs = dict(self.dfine_kwargs)
         backbone_kwargs = dfine_kwargs.pop("backbone_kwargs", {"out_indices": (1, 2, 3)})
+
+        logger.info("Building model with config:")
+        logger.info("  backbone: %s", self.backbone)
+        logger.info("  num_classes: %s", self.num_classes)
+        logger.info("  use_pretrained_backbone: %s", self.use_pretrained_backbone)
+        logger.info("  use_pretrained_head: %s", self.use_pretrained_head)
+        logger.info("  num_feature_levels: %s", dfine_kwargs.get("num_feature_levels"))
+        logger.info("  encoder_in_channels: %s", dfine_kwargs.get("encoder_in_channels"))
+        logger.info("  feat_strides: %s", dfine_kwargs.get("feat_strides"))
+        logger.info("  backbone_kwargs: %s", backbone_kwargs)
+
         dfine_config = DFineConfig(
             backbone=self.backbone,
             use_timm_backbone=True,
@@ -68,7 +85,26 @@ class ModelFactory:
             **dfine_kwargs,
         )
 
+        logger.info("DFineConfig created with:")
+        logger.info("  num_feature_levels: %s", dfine_config.num_feature_levels)
+        logger.info("  encoder_in_channels: %s", dfine_config.encoder_in_channels)
+
         model = DFineForObjectDetection(dfine_config)
+        logger.info(
+            "Model created. encoder_input_proj has %d levels", len(model.model.encoder_input_proj)
+        )
+
+        # Reinitialize D-FINE head if not using pretrained weights
+        if not self.use_pretrained_head:
+            logger.info("Training D-FINE head from scratch (use_pretrained_head=False)")
+            # Reinitialize all non-backbone parameters
+            for name, module in model.named_modules():
+                if "backbone" not in name and hasattr(module, "reset_parameters"):
+                    try:
+                        module.reset_parameters()
+                    except AttributeError:
+                        pass  # Some modules don't have reset_parameters
+            logger.info("D-FINE head reinitialized with random weights")
 
         if self.freeze_backbone:
             for param in model.model.backbone.parameters():

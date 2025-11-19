@@ -11,8 +11,16 @@ class ModelConfig(BaseModel):
     freeze_backbone: bool = Field(
         default=False, description="Whether to freeze backbone parameters"
     )
+    freeze_backbone_epochs: int | None = Field(
+        default=None,
+        ge=0,
+        description="Number of epochs to freeze backbone (None = use freeze_backbone)",
+    )
     use_pretrained_backbone: bool = Field(
         default=True, description="Use pretrained backbone weights"
+    )
+    use_pretrained_head: bool = Field(
+        default=True, description="Use pretrained D-FINE head weights (False = train from scratch)"
     )
     pretrained_checkpoint: str | None = Field(
         default=None, description="Path to pretrained checkpoint"

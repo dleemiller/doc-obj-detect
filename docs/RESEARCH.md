@@ -601,16 +601,30 @@ The histogram above shows the actual bbox distribution in PubLayNet training set
 * **Compute budget allows:** 96GB GPU can handle the +25% compute cost for 4 levels
 * **Expected gains:** +1.5 to +3.0 mAP-small, +0.5 to +1.0 overall mAP based on COCO benchmarks
 
-**Backbone training:**
-* **Split learning rate:** Backbone LR = Head LR × 0.01 (conservative for DINOv3)
-  * Head (D-FINE): 2.5e-4
-  * Backbone (ConvNeXt-L): 2.5e-6 (0.01× multiplier)
-* **Rationale for low multiplier:**
-  * ConvNeXt-Large: 198M params (5× larger than D-FINE-X's 40M HGNetV2-B5)
-  * DINOv3 pretrained on 1.7B images (vs HGNetV2's ~14M ImageNet images)
-  * D-FINE pattern: larger backbone → lower multiplier (S: 0.5, M: 0.1, L: 0.05, X: 0.01)
-  * Features already near-optimal; minimal adjustment prevents catastrophic forgetting
-* Full fine-tuning (no freezing) - DINOv3 pretraining is stable enough
+**Training strategy: Frozen backbone → Full fine-tuning**
+
+* **Phase 1 (Epoch 1): Freeze backbone, train head from scratch**
+  * D-FINE head initialized with random weights (no pretrained weights)
+  * Rationale: Pretrained D-FINE uses 3 levels {8, 16, 32}, we need 4 levels {4, 8, 16, 32} (architecture mismatch)
+  * Backbone frozen to prevent random head gradients from corrupting DINOv3 features
+  * Head LR: 1.25e-4 (scaled for batch size 16)
+  * ~1,850 steps to align head with ConvNeXt-DINOv3 feature space
+
+* **Phase 2 (Epochs 2-12): Unfreeze backbone, end-to-end training**
+  * Split learning rate: Backbone LR = Head LR × 0.01 (conservative for DINOv3)
+    * Head (D-FINE): 1.25e-4
+    * Backbone (ConvNeXt-L): 1.25e-6 (0.01× multiplier)
+  * Rationale for low multiplier:
+    * ConvNeXt-Large: 198M params (5× larger than D-FINE-X's 40M HGNetV2-B5)
+    * DINOv3 pretrained on 1.7B images (vs HGNetV2's ~14M ImageNet images)
+    * D-FINE pattern: larger backbone → lower multiplier (S: 0.5, M: 0.1, L: 0.05, X: 0.01)
+    * Features already near-optimal; minimal adjustment prevents catastrophic forgetting
+
+**Why train head from scratch:**
+* ConvNeXt-DINOv3 features from different distribution than HGNetV2-ImageNet
+* 4-level architecture incompatible with 3-level pretrained weights
+* Document domain requires domain-specific detection head adaptation
+* Backbone features strong enough to compensate for random head initialization
 
 ### 6.2 D-FINE Head Configuration
 

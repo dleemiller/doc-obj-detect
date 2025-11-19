@@ -77,6 +77,9 @@ class TrainerRunner(BaseRunner):
         image_size = self.config.data.image_size
 
         logger.info("Initializing model...")
+        logger.info("dfine_cfg num_feature_levels: %s", dfine_cfg.get("num_feature_levels"))
+        logger.info("dfine_cfg encoder_in_channels: %s", dfine_cfg.get("encoder_in_channels"))
+
         factory = ModelFactory.from_config(model_cfg, dfine_cfg, image_size=image_size)
         artifacts = factory.build()
         model = artifacts.model
@@ -125,7 +128,19 @@ class TrainerRunner(BaseRunner):
         callbacks = []
         if early_stopping_patience is not None:
             callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
-        if self.config.model.freeze_backbone:
+
+        # Handle backbone freezing: either freeze_backbone or freeze_backbone_epochs
+        if self.config.model.freeze_backbone_epochs is not None:
+            # Calculate steps per epoch: need train dataset size / batch_size
+            # We'll calculate this dynamically in the trainer
+            freeze_epochs = self.config.model.freeze_backbone_epochs
+            if freeze_epochs > 0:
+                callbacks.append(
+                    UnfreezeBackboneCallback(
+                        unfreeze_at_epoch=freeze_epochs  # Will be converted to steps by callback
+                    )
+                )
+        elif self.config.model.freeze_backbone:
             callbacks.append(
                 UnfreezeBackboneCallback(
                     unfreeze_at_step=training_config_dict.get("warmup_steps", 0)

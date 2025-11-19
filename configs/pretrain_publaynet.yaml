@@ -2,16 +2,19 @@
 # ConvNeXt-Large-DINOv3 backbone + D-FINE detector head
 
 model:
-  backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (196M params)
+  backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (198M params)
   num_classes: 5  # PubLayNet: text, title, list, table, figure
-  use_pretrained_backbone: true
-  freeze_backbone: false  # Train end-to-end from start with split LR
+  use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 weights (1.7B images, SOTA features)
+  use_pretrained_head: false  # Train D-FINE head from scratch (4-level architecture mismatch)
+  freeze_backbone: true  # Freeze backbone initially to align head with DINOv3 features
+  freeze_backbone_epochs: 1  # Unfreeze after 1 epoch for full end-to-end training
 
 dfine:
   # Backbone feature extraction (ConvNeXt stages 0, 1, 2, 3)
   # Using 4 levels for better small object detection (page numbers, footnotes, formulas)
   # D-FINE default is 3 levels {8, 16, 32}, but we use 4 {4, 8, 16, 32} for documents
   encoder_in_channels: [192, 384, 768, 1536]  # ConvNeXt-L channel dimensions
+  decoder_in_channels: [256, 256, 256, 256]  # Decoder input channels (MUST match num_feature_levels!)
   feat_strides: [4, 8, 16, 32]  # Feature pyramid strides
   num_feature_levels: 4  # D-FINE standard: 3, but 4 levels needed for small objects in documents
   backbone_kwargs:
