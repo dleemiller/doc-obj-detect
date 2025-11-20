@@ -26,9 +26,14 @@ def prepare_run_dirs(output_cfg: OutputConfig) -> RunPaths:
     output_dir = Path(output_cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    run_name = output_cfg.run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Always append timestamp to run name to prevent overwriting
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = output_cfg.run_name or "run"
+    run_name = f"{base_name}_{timestamp}"
+
     if output_cfg.log_dir:
-        log_dir = Path(output_cfg.log_dir)
+        # Create subdirectory with run_name under the specified log_dir
+        log_dir = Path(output_cfg.log_dir) / run_name
     else:
         log_dir = output_dir / "logs" / run_name
     log_dir.mkdir(parents=True, exist_ok=True)

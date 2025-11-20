@@ -191,7 +191,7 @@ class EvaluatorRunner:
             image_processor=processor,
             id2label=class_labels,
             threshold=0.0,
-            max_eval_images=max_eval_samples,
+            max_eval_images=max_eval_samples if max_eval_samples else 2000,
         )
         metrics["eval_loss"] = avg_loss
         return metrics

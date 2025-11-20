@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import torch
 from transformers import Trainer
 from transformers.trainer_utils import EvalLoopOutput, EvalPrediction
+
+logger = logging.getLogger(__name__)
 
 
 class SplitLRTrainer(Trainer):
@@ -92,18 +96,18 @@ class SplitLRTrainer(Trainer):
             all_labels.append(batch_labels)
 
         metrics = {}
+        metric_prefix = f"{metric_key_prefix}_" if metric_key_prefix else ""
         if self.compute_metrics is not None:
             eval_pred = EvalPrediction(predictions=all_preds, label_ids=all_labels)
             metrics = self.compute_metrics(eval_pred)
+            if metric_prefix:
+                metrics = {
+                    key if key.startswith(metric_prefix) else f"{metric_prefix}{key}": value
+                    for key, value in metrics.items()
+                }
 
         if all_losses:
             metrics[f"{metric_key_prefix}_loss"] = sum(all_losses) / len(all_losses)
-
-        if metric_key_prefix != "eval":
-            metrics = {
-                f"{metric_key_prefix}_{k}" if not k.startswith(metric_key_prefix) else k: v
-                for k, v in metrics.items()
-            }
 
         return EvalLoopOutput(
             predictions=all_preds,

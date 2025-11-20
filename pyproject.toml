@@ -21,6 +21,7 @@ dependencies = [
     "albumentationsx>=2.0.13",
     "torchmetrics>=1.8.2",
     "rich>=14.2.0",
+    "bitsandbytes>=0.48.2",
 ]
 
 [project.optional-dependencies]

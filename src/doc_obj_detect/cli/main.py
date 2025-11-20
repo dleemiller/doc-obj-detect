@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> None:
 def _add_train_parser(subparsers):
     parser = subparsers.add_parser("train", help="Run D-FINE training")
     parser.add_argument("--config", required=True, help="Path to training YAML config")
+    parser.add_argument(
+        "--resume-from-checkpoint", type=str, default=None, help="Checkpoint path to resume from"
+    )
     parser.set_defaults(handler=_handle_train)
 
 
@@ -121,7 +124,7 @@ def _add_bbox_hist_parser(subparsers):
 
 def _handle_train(args):
     runner = TrainerRunner.from_config(args.config)
-    runner.run()
+    runner.run(resume_from_checkpoint=args.resume_from_checkpoint)
 
 
 def _handle_evaluate(args):

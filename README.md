@@ -11,7 +11,7 @@ Modern document understanding needs both page-level accuracy and production-read
 
 ## Quick Start
 ```bash
-git clone <repo-url>
+git clone git@github.com:dleemiller/doc-obj-detect.git
 cd doc-obj-detect
 uv sync --extra dev          # installs runtime + ruff/pre-commit
 pre-commit install           # optional but recommended

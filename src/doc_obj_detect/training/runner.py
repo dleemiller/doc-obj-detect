@@ -33,7 +33,7 @@ class TrainerRunner(BaseRunner):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def run(self) -> None:
+    def run(self, resume_from_checkpoint: str | Path | None = None) -> None:
         logger.info("=" * 80)
         logger.info("Training Configuration")
         logger.info("=" * 80)
@@ -57,9 +57,13 @@ class TrainerRunner(BaseRunner):
 
         logger.info("=" * 80)
         logger.info("Starting training...")
+        if resume_from_checkpoint:
+            logger.info("Resuming from checkpoint: %s", resume_from_checkpoint)
         logger.info("=" * 80)
 
-        trainer.train()
+        trainer.train(
+            resume_from_checkpoint=str(resume_from_checkpoint) if resume_from_checkpoint else None
+        )
 
         final_model_path = run_paths.final_model_dir
         logger.info("Saving final model to %s", final_model_path)
