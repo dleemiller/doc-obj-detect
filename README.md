@@ -13,8 +13,6 @@ Modern document understanding needs both page-level accuracy and production-read
 ```bash
 git clone git@github.com:dleemiller/doc-obj-detect.git
 cd doc-obj-detect
-uv sync --extra dev          # installs runtime + ruff/pre-commit
-pre-commit install           # optional but recommended
 ```
 
 ### Train / Evaluate / Distill (Unified CLI)
@@ -70,4 +68,4 @@ tests/                  # Pytest suites covering configs/data/runners/CLI
 - PubLayNet/DocLayNet downloads rely on Hugging Face Datasets; set `data.cache_dir` if `$HF_HOME` is not writable.
 - `RESEARCH.md` captures architecture decisions and training rationale (it is not an ablation log).
 
-See [RESEARCH.md](RESEARCH.md) for the design rationale plus future work, and `CLAUDE.md` / `AGENTS.md` for contributor conventions.
+See [RESEARCH.md](./docs/RESEARCH.md) for the design rationale plus future work, and `CLAUDE.md` / `AGENTS.md` for contributor conventions.
