@@ -1,18 +1,17 @@
 """Visualization utilities for document augmentations."""
 
 import argparse
+import logging
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from doc_obj_detect.config import AugmentationConfig
-from doc_obj_detect.data import (
-    get_augmentation_transform,
-    load_doclaynet,
-    load_publaynet,
-)
+from doc_obj_detect.data.augmentor import AlbumentationsAugmentor
+from doc_obj_detect.data.datasets import DatasetLoader
 
+logger = logging.getLogger(__name__)
 _COLORS = [
     "#FF6B6B",
     "#4ECDC4",
@@ -38,9 +37,9 @@ def visualize_augmentations(
 
     dataset_name = dataset_name.lower()
     if dataset_name == "publaynet":
-        dataset, class_labels = load_publaynet("val", cache_dir)
+        dataset, class_labels = DatasetLoader.load_publaynet("val", cache_dir)
     elif dataset_name == "doclaynet":
-        dataset, class_labels = load_doclaynet("val", cache_dir)
+        dataset, class_labels = DatasetLoader.load_doclaynet("val", cache_dir)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
@@ -49,9 +48,10 @@ def visualize_augmentations(
 
     # Single-scale transform for clarity
     aug_config = AugmentationConfig(multi_scale_sizes=[512]).model_dump()
-    transform = get_augmentation_transform(aug_config, batch_scale=512)
+    augmentor = AlbumentationsAugmentor(aug_config)
+    transform = augmentor.build_transform(batch_scale=512)
 
-    print(f"Generating {num_samples} augmentation samples...")
+    logger.info("Generating %s augmentation samples...", num_samples)
     for idx in range(num_samples):
         sample = dataset[idx]
         image = sample["image"]
@@ -78,9 +78,9 @@ def visualize_augmentations(
         comparison = _compose_side_by_side(original_with_boxes, augmented_with_boxes)
         output_file = output_path / f"sample_{idx:02d}.png"
         comparison.save(output_file)
-        print(f"Saved: {output_file}")
+        logger.info("Saved: %s", output_file)
 
-    print(f"\nSamples saved to {output_path}")
+    logger.info("Samples saved to %s", output_path)
 
 
 def _draw_bboxes(
@@ -112,24 +112,19 @@ def _compose_side_by_side(
     augmented: np.ndarray,
 ) -> Image.Image:
     """Create a labeled side-by-side comparison image."""
-    h, w = original.shape[:2]
-    comparison = np.zeros((h, w * 2, 3), dtype=np.uint8)
-    comparison[:, :w] = original
-    comparison[:, w:] = augmented
+    orig_h, orig_w = original.shape[:2]
+    aug_h, aug_w = augmented.shape[:2]
+    canvas_height = max(orig_h, aug_h)
+    comparison = np.zeros((canvas_height, orig_w + aug_w, 3), dtype=np.uint8)
+    comparison[:orig_h, :orig_w] = original
+    comparison[:aug_h, orig_w : orig_w + aug_w] = augmented
 
     comparison_image = Image.fromarray(comparison)
     draw = ImageDraw.Draw(comparison_image)
     font = _load_font(size=24)
+    draw.text((20, 20), "Original", fill="white", font=font, stroke_width=2, stroke_fill="black")
     draw.text(
-        (20, 20),
-        "Original",
-        fill="white",
-        font=font,
-        stroke_width=2,
-        stroke_fill="black",
-    )
-    draw.text(
-        (w + 20, 20),
+        (orig_w + 20, 20),
         "Augmented",
         fill="white",
         font=font,

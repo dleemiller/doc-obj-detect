@@ -2,7 +2,7 @@
 
 import torch
 
-from doc_obj_detect.model import create_model, get_trainable_parameters
+from doc_obj_detect.models import create_model, get_trainable_parameters
 
 
 def test_create_model_basic():

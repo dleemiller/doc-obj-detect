@@ -2,32 +2,41 @@
 # ConvNeXt-Large-DINOv3 backbone + D-FINE detector head
 
 model:
-  backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (196M params)
+  backbone: "convnext_base.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (198M params)
   num_classes: 5  # PubLayNet: text, title, list, table, figure
-  use_pretrained_backbone: true
-  freeze_backbone: false  # Train end-to-end from start with split LR
+  use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 weights (1.7B images, SOTA features)
+  use_pretrained_head: false  # Train D-FINE head from scratch (4-level architecture mismatch)
+  freeze_backbone: true  # Freeze backbone initially to align head with DINOv3 features
+  freeze_backbone_epochs: 1  # Unfreeze after 1 epoch for full end-to-end training
 
 dfine:
-  # Backbone feature extraction (ConvNeXt stages 1, 2, 3)
-  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-L channel dimensions
-  feat_strides: [8, 16, 32]  # Feature pyramid strides
-  num_feature_levels: 3  # Multi-scale levels
+  # Backbone feature extraction (ConvNeXt stages 0, 1, 2, 3)
+  # Using 4 levels for better small object detection (page numbers, footnotes, formulas)
+  # D-FINE default is 3 levels {8, 16, 32}, but we use 4 {4, 8, 16, 32} for documents
+  encoder_in_channels: [128, 256, 512, 1024]  # ConvNeXt-L channel dimensions
+  decoder_in_channels: [288, 288, 288, 288]  # Match D-FINE-X d_model: 384 (MUST match num_feature_levels!)
+  feat_strides: [4, 8, 16, 32]  # Feature pyramid strides
+  num_feature_levels: 4  # D-FINE standard: 3, but 4 levels needed for small objects in documents
   backbone_kwargs:
-    out_indices: [1, 2, 3]  # Extract from stages 1, 2, 3
+    out_indices: [0, 1, 2, 3]  # Extract from stages 0, 1, 2, 3 (C2, C3, C4, C5)
 
-  # Encoder configuration
-  encoder_hidden_dim: 256
+  # Encoder configuration (D-FINE-X settings)
+  encoder_hidden_dim: 288  # D-FINE-X uses 384 (vs 256 for L/M/S)
   encoder_layers: 1
-  encoder_ffn_dim: 1024
+  encoder_ffn_dim: 1280  # D-FINE-X uses 2048 (vs 1024 for L/M/S)
   encoder_attention_heads: 8
+  encoder_activation_function: "gelu"
 
-  # Decoder configuration
-  d_model: 256
+  # Decoder configuration (D-FINE-X settings)
+  d_model: 288  # D-FINE-X embedding dimension: 384 (vs 256 for L/M/S)
   num_queries: 300  # Number of object queries
   decoder_layers: 6
-  decoder_ffn_dim: 1024
+  decoder_ffn_dim: 1280  # D-FINE-X uses 2048 (vs 1024 for L/M/S)
   decoder_attention_heads: 8
   decoder_n_points: 4
+  decoder_activation_function: "silu"
+
+  max_num_bins: 48
 
   # D-FINE specific losses (FDR + GO-LSD)
   weight_loss_vfl: 1.0  # Varifocal loss
@@ -45,32 +54,32 @@ data:
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
   image_size: 512  # Standard document detection size
-  batch_size: 20  # Match D-FINE defaults and SOTA paper (16-32 range)
+  batch_size: 16  # Half of D-FINE standard (32) due to 4 feature levels (C2 adds ~25% memory)
   max_eval_samples: 1000
   num_workers: 4  # Reduced to avoid "too many open files"
 
 augmentation:
   # Multi-scale training for better scale invariance and small object detection
-  multi_scale_sizes: [480, 512, 544, 576, 608, 640]
+  multi_scale_sizes: [576, 608, 640]
   max_long_side: 928
-  rotate_limit: 5
-  rotate_prob: 0.5
+  rotate_limit: 3
+  rotate_prob: 0.3
   perspective:
-    probability: 0.3
+    probability: 0.15
     scale_min: 0.02
     scale_max: 0.05
   elastic:
-    probability: 0.2
+    probability: 0.0
     alpha: 30
     sigma: 5
   brightness_contrast:
     limit: 0.2
     probability: 0.5
   blur:
-    probability: 0.3
+    probability: 0.2
     blur_limit: 3
   compression:
-    probability: 0.3
+    probability: 0.2
     quality_min: 75
     quality_max: 100
   noise:
@@ -83,25 +92,28 @@ training:
   # Cosine LR provides natural "precision tail" for final mAP gains
   num_train_epochs: 12
 
-  # Learning rates (split LR: backbone 1/10 of head)
-  # Reduced from 2e-4 to address high gradient norms (89-175)
-  # Lower LR should reduce gradient magnitudes and improve stability
-  # lr_head = 1e-4
-  # lr_backbone = 1e-4 * 0.1 = 1e-5
-  learning_rate: 1.0e-4  # Head LR (backbone will be 1/10)
+  # Learning rates (D-FINE-X/L defaults, scaled for batch size 16)
+  # D-FINE uses batch_size=32 with base_lr=2.5e-4
+  # We use batch_size=16, so linear scaling: base_lr = 2.5e-4 / 2 = 1.25e-4
+  # D-FINE pattern: larger backbone → lower multiplier (S: 0.5, M: 0.1, L: 0.05, X: 0.01)
+  # ConvNeXt-Large DINOv3: 198M params (5× larger than D-FINE-X's 40M HGNetV2-B5)
+  # Using 0.01 multiplier (matches D-FINE-X) to preserve strong DINOv3 representations
+  # lr_head = 1.25e-4
+  # lr_backbone = 1.25e-4 * 0.01 = 1.25e-6
+  learning_rate: 1.25e-4  # Head LR (D-FINE-X/L 2.5e-4 scaled for batch_size 16)
 
   # Optimizer settings
-  weight_decay: 0.05  # AdamW weight decay
+  weight_decay: 1.25e-4  # D-FINE-X/L standard (was 0.05, which is 400x too large!)
 
   # Warmup and scheduling
   lr_scheduler_type: "cosine_with_min_lr"
   warmup_ratio: 0.08  # 8% of total training (was 5000 steps, too long for rapid convergence)
   lr_scheduler_kwargs:
-    min_lr: 1.0e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
+    min_lr: 1.25e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
 
   # Gradient settings
   gradient_accumulation_steps: 1
-  max_grad_norm: 1.0  # Gradient clipping (relaxed from 0.5 based on observed norms of 89-175)
+  max_grad_norm: 1.0  # Gradient clipping for stability
 
   # Mixed precision
   bf16: true
@@ -114,12 +126,12 @@ training:
   save_strategy: "steps"
   save_total_limit: 3
   load_best_model_at_end: true
-  metric_for_best_model: "eval_loss"
-  greater_is_better: false
+  metric_for_best_model: "map"
+  greater_is_better: true
   push_to_hub: false
 
 output:
   output_dir: "outputs/pretrain_publaynet_dfine"
   checkpoint_dir: "outputs/pretrain_publaynet_dfine/checkpoints"
   log_dir: "outputs/pretrain_publaynet_dfine/logs"
-  run_name: "multiscale_lr1e4_bs32_12ep"  # Unique name for TensorBoard (or use timestamp if null)
+  run_name: "multiscale_lr1e4_bs16_12ep"  # Unique name for TensorBoard (or use timestamp if null)
