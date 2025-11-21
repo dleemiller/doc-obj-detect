@@ -35,11 +35,9 @@ class SplitLRTrainer(Trainer):
 
         optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args)
         base_lr = self.args.learning_rate
-        # ConvNeXt-Large DINOv3 (198M params) vs HGNetV2 (4-40M params):
-        # D-FINE-X (40M backbone): 0.01 multiplier
-        # D-FINE-L (18M backbone): 0.05 multiplier
-        # ConvNeXt-L is 5-10× larger + DINOv3 pretrained on 1.7B images
-        # Using 0.01 (conservative) to preserve strong DINOv3 representations
+        # ConvNeXt-DINOv3 backbones are substantially heavier than the HGNetV2 family used
+        # in the original D-FINE paper, so we treat them like the X-large variant and keep
+        # a conservative 0.01 LR multiplier to preserve their pretrained representations.
         optimizer_grouped_parameters = [
             {"params": other_params, "lr": base_lr},
             {"params": backbone_params, "lr": base_lr * 0.01},  # 2.5e-6 for base_lr=2.5e-4
@@ -115,3 +113,20 @@ class SplitLRTrainer(Trainer):
             metrics=metrics,
             num_samples=len(dataloader.dataset),
         )
+
+    def log(self, logs):  # type: ignore[override]
+        """Log extra diagnostics such as VRAM usage."""
+
+        if torch.cuda.is_available():
+            device = torch.cuda.current_device()
+            try:
+                mem_bytes = torch.cuda.max_memory_allocated(device)
+            except RuntimeError:
+                mem_bytes = 0
+
+            if mem_bytes > 0:
+                metric_prefix = "eval" if any(key.startswith("eval") for key in logs) else "train"
+                logs.setdefault(f"{metric_prefix}_vram_mb", mem_bytes / (1024**2))
+            torch.cuda.reset_peak_memory_stats(device)
+
+        return super().log(logs)

@@ -30,11 +30,11 @@ Our architecture addresses these challenges by combining:
 
 | Component     | Choice                                                                |
 | ------------- | --------------------------------------------------------------------- |
-| Backbone      | **ConvNeXt** (Tiny/Small/Base/Large) with **DINOv3** pretraining    |
+| Backbone      | **ConvNeXt** (Tiny/Small/Base) with **DINOv3** pretraining          |
 | Detector Head | **D-FINE** (Fine-grained Distribution Refinement + GO-LSD)           |
 | Datasets      | PubLayNet pretrain (5 classes) → DocLayNet finetune (11 classes)     |
-| Image Policy  | Aspect-preserving multiscale (448–640 px, batch-level scaling)       |
-| Distillation  | Teacher: ConvNeXt-Large + D-FINE → Students: Smaller variants        |
+| Image Policy  | Aspect-preserving multiscale (576–640 px, batch-level scaling)       |
+| Distillation  | Teacher: ConvNeXt-Base + D-FINE → Students: Small/Tiny variants      |
 
 **Core philosophy:** Leverage modern self-supervised pretraining (DINOv3) and distribution-based localization (D-FINE) to achieve SOTA accuracy, then distill to deployment-friendly sizes.
 
@@ -285,11 +285,12 @@ DINOv3 distills the 7B teacher to practical student sizes using **multi-student 
 | ViT-S/14      | 22M    | 81.1%          | Strong                 |
 | ViT-B/14      | 86M    | 84.5%          | SOTA                   |
 | ViT-L/14      | 304M   | 86.3%          | SOTA                   |
-| **ConvNeXt-L**| **198M** | **84.6%**    | **Excellent for detection** |
+| **ConvNeXt-B**| **89M** | **83.8%**     | **Excellent for detection** |
+| ConvNeXt-L    | 198M   | 84.6%          | Excellent for detection |
 
-**timm checkpoint:** `convnext_large.dinov3_lvd1689m`
-* ConvNeXt-L distilled from DINOv3 ViT-g teacher
-* 198M parameters
+**timm checkpoint:** `convnext_base.dinov3_lvd1689m`
+* ConvNeXt-Base distilled from DINOv3 ViT-g teacher
+* 89M parameters
 * Trained on 1.689B images (lvd1689m = "large visual dataset 1689 million")
 * Optimized for dense prediction (detection, segmentation)
 
@@ -551,18 +552,18 @@ D-FINE-X with Objects365 pretraining achieves **59.3 AP** - competitive with muc
 
 ### 6.1 Backbone Configuration
 
-**Model:** ConvNeXt-Large with DINOv3 pretraining
-* timm checkpoint: `convnext_large.dinov3_lvd1689m`
-* 198M parameters
+**Model:** ConvNeXt-Base with DINOv3 pretraining
+* timm checkpoint: `convnext_base.dinov3_lvd1689m`
+* 89M parameters
 * Pretrained on 1.689B images via self-supervised distillation
 
 **Feature extraction:**
 * Extract from stages 0, 1, 2, 3 (ConvNeXt hierarchy)
 * For D-FINE, we use **4 levels:** C2, C3, C4, C5 at strides {4, 8, 16, 32}
-  * C2: 192 channels, stride 4, ~160×160 spatial (for 640px input)
-  * C3: 384 channels, stride 8, ~80×80 spatial
-  * C4: 768 channels, stride 16, ~40×40 spatial
-  * C5: 1536 channels, stride 32, ~20×20 spatial
+  * C2: 128 channels, stride 4, ~160×160 spatial (for 640px input)
+  * C3: 256 channels, stride 8, ~80×80 spatial
+  * C4: 512 channels, stride 16, ~40×40 spatial
+  * C5: 1024 channels, stride 32, ~20×20 spatial
 
 **Why 4 levels (not D-FINE's default 3)?**
 
@@ -613,10 +614,10 @@ The histogram above shows the actual bbox distribution in PubLayNet training set
 * **Phase 2 (Epochs 2-12): Unfreeze backbone, end-to-end training**
   * Split learning rate: Backbone LR = Head LR × 0.01 (conservative for DINOv3)
     * Head (D-FINE): 1.25e-4
-    * Backbone (ConvNeXt-L): 1.25e-6 (0.01× multiplier)
+    * Backbone (ConvNeXt-Base): 1.25e-6 (0.01× multiplier)
   * Rationale for low multiplier:
-    * ConvNeXt-Large: 198M params (5× larger than D-FINE-X's 40M HGNetV2-B5)
-    * DINOv3 pretrained on 1.7B images (vs HGNetV2's ~14M ImageNet images)
+    * ConvNeXt-Base: 89M params (well-matched to D-FINE head size)
+    * DINOv3 pretrained on 1.7B images (vs ImageNet's ~14M images)
     * D-FINE pattern: larger backbone → lower multiplier (S: 0.5, M: 0.1, L: 0.05, X: 0.01)
     * Features already near-optimal; minimal adjustment prevents catastrophic forgetting
 
@@ -826,31 +827,31 @@ Solution: **Batch-level random scaling**
 
 **Training configuration:**
 * Epochs: 12
-* Batch size: 32 (per GPU, 96GB VRAM)
-* Gradient accumulation: 1 (effective batch = 32)
+* Batch size: 16 (per GPU, 96GB VRAM)
+* Gradient accumulation: 1 (effective batch = 16)
 * Precision: BF16 (mixed precision)
 
 **Optimizer (AdamW):**
-* Learning rate: 1e-4 (head), 1e-5 (backbone)
-* Weight decay: 0.05
+* Learning rate: 1.25e-4 (head), 1.25e-6 (backbone with 0.01× multiplier)
+* Weight decay: 1.25e-4
 * Betas: (0.9, 0.999)
 * Gradient clipping: max_norm = 1.0
 
 **Learning rate schedule:**
-* Type: Cosine annealing
-* Warmup: 10% of training (warmup_ratio = 0.1)
-* Min LR: 1e-5 (eta_min)
+* Type: Cosine annealing with min_lr
+* Warmup: 8% of training (warmup_ratio = 0.08)
+* Min LR: 1.25e-5 (base_lr / 10)
 * Warmup schedule:
   ```
-  Steps 0-1350: Linear warmup 0 → 1e-4
-  Steps 1350-13500: Cosine decay 1e-4 → 1e-5
+  Steps 0-~1200: Linear warmup 0 → 1.25e-4
+  Steps 1200-end: Cosine decay 1.25e-4 → 1.25e-5
   ```
 
 **Why cosine with long tail?**
-* Initial phase (steps 0-5000): Fast convergence, model learns coarse features
-* Middle phase (steps 5000-10000): Refinement of boundaries, class discrimination
-* Final phase (steps 10000-13500): "Precision tail" - small LR for fine-tuning
-* Min LR 1e-5 (10× lower than max) allows continued learning without degradation
+* Initial phase: Fast convergence, model learns coarse features
+* Middle phase: Refinement of boundaries, class discrimination
+* Final phase: "Precision tail" - small LR for fine-tuning
+* Min LR 1.25e-5 (10× lower than max) allows continued learning without degradation
 
 **Checkpointing:**
 * Save every 500 steps
@@ -865,7 +866,7 @@ Solution: **Batch-level random scaling**
 **Expected performance:**
 * Target: 90%+ mAP@50 on PubLayNet validation
 * SOTA reference: 97.3% mAP (with enhanced query encoding + hybrid matching)
-* Our baseline: ~92-94% mAP (ConvNeXt-L + D-FINE)
+* Our baseline: ~90-92% mAP (ConvNeXt-Base + D-FINE)
 
 ### 7.2 DocLayNet Fine-Tuning
 
@@ -877,18 +878,18 @@ Solution: **Batch-level random scaling**
 
 **Training configuration:**
 * Epochs: 24 (longer than PubLayNet - smaller dataset, more classes)
-* Batch size: 32
+* Batch size: 16
 * Precision: BF16
 
 **Optimizer (AdamW):**
-* Learning rate: 5e-5 (head), 5e-6 (backbone) - lower than PubLayNet
-* Weight decay: 0.05
+* Learning rate: 5e-5 (head), 5e-7 (backbone with 0.01× multiplier) - lower than PubLayNet
+* Weight decay: 5e-5
 * Gradient clipping: max_norm = 1.0
 
 **Learning rate schedule:**
-* Type: Cosine annealing
-* Warmup: 10%
-* Min LR: 5e-6
+* Type: Cosine annealing with min_lr
+* Warmup: 8%
+* Min LR: 5e-6 (base_lr / 10)
 
 **Transfer from PubLayNet:**
 1. Load PubLayNet checkpoint (backbone + decoder)
@@ -929,15 +930,14 @@ Solution: **Batch-level random scaling**
 
 ### 8.1 Teacher-Student Architecture
 
-**Teacher:** ConvNeXt-Large (198M) + D-FINE
+**Teacher:** ConvNeXt-Base (89M) + D-FINE
 * Trained to convergence on PubLayNet + DocLayNet
 * Frozen during distillation
 * Produces soft targets (distributions, logits, features)
 
 **Students:** Smaller ConvNeXt variants + D-FINE
-* ConvNeXt-Base (89M) + D-FINE → 2.2× smaller, 1.5× faster
-* ConvNeXt-Small (50M) + D-FINE → 4× smaller, 2× faster
-* ConvNeXt-Tiny (28M) + D-FINE → 7× smaller, 3× faster
+* ConvNeXt-Small (50M) + D-FINE → 1.8× smaller, 1.5× faster
+* ConvNeXt-Tiny (28M) + D-FINE → 3.2× smaller, 2× faster
 
 **Student initialization:**
 * Backbone: DINOv3 pretrained (same as teacher, but smaller)
@@ -1026,7 +1026,7 @@ Hybrid loss prevents student from drifting away from ground truth.
 **Step 3: Distillation training**
 * Dataset: Same as teacher (PubLayNet + DocLayNet)
 * Epochs: 12 (fewer than teacher, benefits from soft targets)
-* Batch size: 32
+* Batch size: 16
 * LR: 5e-5 (lower than from-scratch training)
 
 **Step 4: Fine-tuning (optional)**
@@ -1040,13 +1040,12 @@ Based on COCO distillation benchmarks:
 
 | Model              | Params | FLOPs | Latency (A100) | Expected mAP Drop | Feature Levels    |
 |--------------------|--------|-------|----------------|-------------------|-------------------|
-| Teacher (CNX-L)    | 198M   | 34G   | ~50ms          | 0% (baseline)     | 4 {4,8,16,32}     |
-| Student (CNX-B)    | 89M    | 15G   | ~30ms          | -2 to -3 mAP      | 4 {4,8,16,32}     |
-| Student (CNX-S)    | 50M    | 9G    | ~20ms          | -4 to -5 mAP      | 3 or 4            |
-| Student (CNX-Tiny) | 28M    | 5G    | ~15ms          | -6 to -8 mAP      | 3 {8,16,32}       |
+| Teacher (CNX-Base) | 89M    | 15G   | ~30ms          | 0% (baseline)     | 4 {4,8,16,32}     |
+| Student (CNX-S)    | 50M    | 9G    | ~20ms          | -2 to -3 mAP      | 3 or 4            |
+| Student (CNX-Tiny) | 28M    | 5G    | ~15ms          | -4 to -6 mAP      | 3 {8,16,32}       |
 
 **Feature level recommendations by model size:**
-* **Large/Base:** Use 4 levels {4, 8, 16, 32} - maximize accuracy, have compute budget
+* **Base:** Use 4 levels {4, 8, 16, 32} - maximize accuracy, good compute budget
 * **Small:** Use 4 levels for teacher matching, consider 3 for production (speed vs accuracy trade-off)
 * **Tiny:** Use 3 levels {8, 16, 32} - memory/speed critical, accept small object mAP loss
 
@@ -1066,13 +1065,13 @@ With good distillation, students retain 92-96% of teacher performance while bein
 
 **Latency targets:**
 * ConvNeXt-Tiny + D-FINE: <20ms/image on A100 (real-time at 50+ FPS)
-* ConvNeXt-Small + D-FINE: <30ms/image (30+ FPS)
-* ConvNeXt-Base + D-FINE: <50ms/image (20 FPS)
+* ConvNeXt-Small + D-FINE: <25ms/image (40+ FPS)
+* ConvNeXt-Base + D-FINE: <35ms/image (30 FPS)
 
 **Use cases:**
-* Tiny/Small: Real-time document scanning apps, edge devices
-* Base: Batch processing, server-side APIs
-* Large (teacher): Offline annotation, dataset creation, teacher for further distillation
+* Tiny: Real-time document scanning apps, edge devices, mobile deployment
+* Small: Balanced latency/accuracy for interactive applications
+* Base: High-accuracy batch processing, server-side APIs, offline annotation
 
 ---
 

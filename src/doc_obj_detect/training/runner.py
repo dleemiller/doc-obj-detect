@@ -80,11 +80,17 @@ class TrainerRunner(BaseRunner):
         dfine_cfg = self.config.dfine.model_dump()
         image_size = self.config.data.image_size
 
+        # Get class labels before building model
+        class_labels = self._get_class_labels()
+        logger.info("Class labels for %s: %s", self.config.data.dataset, class_labels)
+
         logger.info("Initializing model...")
         logger.info("dfine_cfg num_feature_levels: %s", dfine_cfg.get("num_feature_levels"))
         logger.info("dfine_cfg encoder_in_channels: %s", dfine_cfg.get("encoder_in_channels"))
 
-        factory = ModelFactory.from_config(model_cfg, dfine_cfg, image_size=image_size)
+        factory = ModelFactory.from_config(
+            model_cfg, dfine_cfg, image_size=image_size, id2label=class_labels
+        )
         artifacts = factory.build()
         model = artifacts.model
         processor = artifacts.processor

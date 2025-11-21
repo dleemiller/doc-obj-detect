@@ -5,7 +5,7 @@ model:
   num_classes: 11  # DocLayNet classes
   freeze_backbone: true  # Freeze backbone during fine-tuning
   use_pretrained_backbone: true
-  pretrained_checkpoint: "outputs/pretrain_publaynet/checkpoints/best_model.pth"
+  pretrained_checkpoint: "outputs/pretrain_publaynet_dfine/checkpoints/best_model.pth"
 
 detr:
   # Deformable DETR architecture parameters (same as pretraining)

@@ -1,37 +1,37 @@
 # D-FINE Pretraining configuration for PubLayNet dataset
-# ConvNeXt-Large-DINOv3 backbone + D-FINE detector head
+# ConvNeXt-Base DINOv3 backbone + D-FINE detector head (fits 4 stride levels in 24 GB)
 
 model:
-  backbone: "convnext_base.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (198M params)
+  backbone: "convnext_base.dinov3_lvd1689m"  # ConvNeXt-Base DINOv3 (~89M params) keeps VRAM in check
   num_classes: 5  # PubLayNet: text, title, list, table, figure
   use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 weights (1.7B images, SOTA features)
-  use_pretrained_head: false  # Train D-FINE head from scratch (4-level architecture mismatch)
-  freeze_backbone: true  # Freeze backbone initially to align head with DINOv3 features
+  use_pretrained_head: false  # Reinitialize head because channel layout differs from the checkpoint
+  freeze_backbone: true  # Let the decoder stabilize against frozen ConvNeXt features
   freeze_backbone_epochs: 1  # Unfreeze after 1 epoch for full end-to-end training
 
 dfine:
-  # Backbone feature extraction (ConvNeXt stages 0, 1, 2, 3)
+  # Backbone feature extraction (ConvNeXt-Base stages 0–3)
   # Using 4 levels for better small object detection (page numbers, footnotes, formulas)
   # D-FINE default is 3 levels {8, 16, 32}, but we use 4 {4, 8, 16, 32} for documents
-  encoder_in_channels: [128, 256, 512, 1024]  # ConvNeXt-L channel dimensions
-  decoder_in_channels: [288, 288, 288, 288]  # Match D-FINE-X d_model: 384 (MUST match num_feature_levels!)
+  encoder_in_channels: [128, 256, 512, 1024]  # ConvNeXt-Base channel dimensions
+  decoder_in_channels: [288, 288, 288, 288]  # Matches custom d_model setting (must align per level)
   feat_strides: [4, 8, 16, 32]  # Feature pyramid strides
   num_feature_levels: 4  # D-FINE standard: 3, but 4 levels needed for small objects in documents
   backbone_kwargs:
     out_indices: [0, 1, 2, 3]  # Extract from stages 0, 1, 2, 3 (C2, C3, C4, C5)
 
-  # Encoder configuration (D-FINE-X settings)
-  encoder_hidden_dim: 288  # D-FINE-X uses 384 (vs 256 for L/M/S)
+  # Encoder configuration tuned for 4-level pyramid
+  encoder_hidden_dim: 288  # Slightly wider than D-FINE-L (256) to keep the extra level stable
   encoder_layers: 1
-  encoder_ffn_dim: 1280  # D-FINE-X uses 2048 (vs 1024 for L/M/S)
+  encoder_ffn_dim: 1280  # Midpoint between the 1024 (L) and 2048 (X) templates
   encoder_attention_heads: 8
   encoder_activation_function: "gelu"
 
-  # Decoder configuration (D-FINE-X settings)
-  d_model: 288  # D-FINE-X embedding dimension: 384 (vs 256 for L/M/S)
+  # Decoder configuration
+  d_model: 288  # Custom width: 256 was too narrow for 4 levels; 384 was too expensive
   num_queries: 300  # Number of object queries
   decoder_layers: 6
-  decoder_ffn_dim: 1280  # D-FINE-X uses 2048 (vs 1024 for L/M/S)
+  decoder_ffn_dim: 1280  # Pair FFN size with encoder_hidden_dim for balanced capacity
   decoder_attention_heads: 8
   decoder_n_points: 4
   decoder_activation_function: "silu"
@@ -54,7 +54,7 @@ data:
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
   image_size: 512  # Standard document detection size
-  batch_size: 16  # Half of D-FINE standard (32) due to 4 feature levels (C2 adds ~25% memory)
+  batch_size: 16  # Trimmed from the 32-image D-FINE recipe to leave VRAM for the C2 feature map
   max_eval_samples: 1000
   num_workers: 4  # Reduced to avoid "too many open files"
 
@@ -92,18 +92,13 @@ training:
   # Cosine LR provides natural "precision tail" for final mAP gains
   num_train_epochs: 12
 
-  # Learning rates (D-FINE-X/L defaults, scaled for batch size 16)
-  # D-FINE uses batch_size=32 with base_lr=2.5e-4
-  # We use batch_size=16, so linear scaling: base_lr = 2.5e-4 / 2 = 1.25e-4
-  # D-FINE pattern: larger backbone → lower multiplier (S: 0.5, M: 0.1, L: 0.05, X: 0.01)
-  # ConvNeXt-Large DINOv3: 198M params (5× larger than D-FINE-X's 40M HGNetV2-B5)
-  # Using 0.01 multiplier (matches D-FINE-X) to preserve strong DINOv3 representations
-  # lr_head = 1.25e-4
-  # lr_backbone = 1.25e-4 * 0.01 = 1.25e-6
-  learning_rate: 1.25e-4  # Head LR (D-FINE-X/L 2.5e-4 scaled for batch_size 16)
+  # Learning rates follow the D-FINE schedule scaled to batch_size=16 (base 2.5e-4 → 1.25e-4)
+  # SplitLRTrainer applies a 0.01 multiplier to the ConvNeXt backbone so the frozen warm-up
+  # does not destroy the strong DINOv3 features.
+  learning_rate: 1.25e-4  # Head LR after linear scaling from the 32-image reference run
 
   # Optimizer settings
-  weight_decay: 1.25e-4  # D-FINE-X/L standard (was 0.05, which is 400x too large!)
+  weight_decay: 1.25e-4  # Matches the official D-FINE configs; larger values over-regularize
 
   # Warmup and scheduling
   lr_scheduler_type: "cosine_with_min_lr"
@@ -134,4 +129,4 @@ output:
   output_dir: "outputs/pretrain_publaynet_dfine"
   checkpoint_dir: "outputs/pretrain_publaynet_dfine/checkpoints"
   log_dir: "outputs/pretrain_publaynet_dfine/logs"
-  run_name: "multiscale_lr1e4_bs16_12ep"  # Unique name for TensorBoard (or use timestamp if null)
+  run_name: "multiscale_lr1.25e-4_bs16_12ep"  # Unique name for TensorBoard (or use timestamp if null)

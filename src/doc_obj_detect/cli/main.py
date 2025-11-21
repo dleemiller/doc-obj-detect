@@ -7,6 +7,7 @@ import logging
 
 from doc_obj_detect.data.datasets import DatasetLoader
 from doc_obj_detect.tools import (
+    cleanup_outputs,
     collect_bbox_samples,
     compute_stride_ranges,
     load_bbox_data,
@@ -29,6 +30,7 @@ def main(argv: list[str] | None = None) -> None:
     _add_visualize_parser(subparsers)
     _add_dataset_info_parser(subparsers)
     _add_bbox_hist_parser(subparsers)
+    _add_cleanup_parser(subparsers)
 
     args = parser.parse_args(argv)
     args.handler(args)
@@ -115,6 +117,25 @@ def _add_bbox_hist_parser(subparsers):
         help="Load precomputed bbox statistics (.npz) instead of scanning the dataset",
     )
     parser.set_defaults(handler=_handle_bbox_hist)
+
+
+def _add_cleanup_parser(subparsers):
+    parser = subparsers.add_parser(
+        "cleanup", help="Remove output dirs that never produced checkpoints"
+    )
+    parser.add_argument(
+        "--root",
+        action="append",
+        dest="roots",
+        default=None,
+        help="Output directory root to scan (can be specified multiple times). Defaults to ./outputs",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show directories that would be removed without deleting anything",
+    )
+    parser.set_defaults(handler=_handle_cleanup)
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +225,40 @@ def _handle_bbox_hist(args):
         output_path=args.output,
     )
     logger.info("Saved bbox histograms to %s", args.output)
+
+
+def _handle_cleanup(args):
+    roots = args.roots or ["outputs"]
+    total_removed = 0
+
+    for root in roots:
+        summary = cleanup_outputs(root, dry_run=args.dry_run)
+        if not summary.root.exists():
+            logger.warning("Root %s does not exist. Skipping.", summary.root)
+            continue
+
+        if not summary.candidates:
+            logger.info("No incomplete runs found under %s", summary.root)
+            continue
+
+        if args.dry_run:
+            logger.info(
+                "[dry-run] Would remove %d directories under %s",
+                len(summary.candidates),
+                summary.root,
+            )
+            for path in summary.candidates:
+                logger.info("  %s", path)
+        else:
+            logger.info(
+                "Removing %d directories under %s",
+                len(summary.removed),
+                summary.root,
+            )
+            total_removed += len(summary.removed)
+
+    if not args.dry_run:
+        logger.info("Cleanup complete. Removed %d directories.", total_removed)
 
 
 if __name__ == "__main__":  # pragma: no cover

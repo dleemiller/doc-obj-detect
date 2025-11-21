@@ -62,9 +62,13 @@ class DistillRunner(BaseRunner):
     # Helpers
     # ------------------------------------------------------------------
     def _build_student_model(self):
+        # Get class labels before building model
+        class_labels = self._get_class_labels()
+        logger.info("Class labels for %s: %s", self.config.data.dataset, class_labels)
+
         dfine_cfg = self.config.dfine.model_dump()
         factory = ModelFactory.from_config(
-            self.config.model, dfine_cfg, self.config.data.image_size
+            self.config.model, dfine_cfg, self.config.data.image_size, id2label=class_labels
         )
         artifacts = factory.build()
         processors = self._prepare_processors(artifacts.processor)

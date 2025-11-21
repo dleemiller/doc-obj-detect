@@ -32,6 +32,7 @@ class ModelFactory:
         image_size: int = 512,
         pretrained_checkpoint: str | None = None,
         processor_candidates: tuple[str, ...] | None = None,
+        id2label: dict[int, str] | None = None,
         **dfine_kwargs: Any,
     ) -> None:
         self.backbone = backbone
@@ -46,10 +47,17 @@ class ModelFactory:
             "ustc-community/dfine-xlarge-obj2coco",
             "ustc-community/dfine-xlarge-coco",
         )
+        self.id2label = id2label
         self.dfine_kwargs = dfine_kwargs
 
     @classmethod
-    def from_config(cls, model_cfg, dfine_cfg: dict[str, Any], image_size: int) -> ModelFactory:
+    def from_config(
+        cls,
+        model_cfg,
+        dfine_cfg: dict[str, Any],
+        image_size: int,
+        id2label: dict[int, str] | None = None,
+    ) -> ModelFactory:
         return cls(
             backbone=model_cfg.backbone,
             num_classes=model_cfg.num_classes,
@@ -59,6 +67,7 @@ class ModelFactory:
             freeze_backbone_epochs=model_cfg.freeze_backbone_epochs,
             image_size=image_size,
             pretrained_checkpoint=model_cfg.pretrained_checkpoint,
+            id2label=id2label,
             **dfine_cfg,
         )
 
@@ -76,14 +85,23 @@ class ModelFactory:
         logger.info("  feat_strides: %s", dfine_kwargs.get("feat_strides"))
         logger.info("  backbone_kwargs: %s", backbone_kwargs)
 
-        dfine_config = DFineConfig(
-            backbone=self.backbone,
-            use_timm_backbone=True,
-            use_pretrained_backbone=self.use_pretrained_backbone,
-            backbone_kwargs=backbone_kwargs,
-            num_labels=self.num_classes,
+        # Prepare label mappings
+        config_kwargs = {
+            "backbone": self.backbone,
+            "use_timm_backbone": True,
+            "use_pretrained_backbone": self.use_pretrained_backbone,
+            "backbone_kwargs": backbone_kwargs,
+            "num_labels": self.num_classes,
             **dfine_kwargs,
-        )
+        }
+
+        # Add label mappings if provided
+        if self.id2label is not None:
+            config_kwargs["id2label"] = self.id2label
+            config_kwargs["label2id"] = {v: k for k, v in self.id2label.items()}
+            logger.info("Setting label mappings: %s", self.id2label)
+
+        dfine_config = DFineConfig(**config_kwargs)
 
         logger.info("DFineConfig created with:")
         logger.info("  num_feature_levels: %s", dfine_config.num_feature_levels)
@@ -170,6 +188,7 @@ def create_model(
     freeze_backbone: bool = False,
     image_size: int = 512,
     pretrained_checkpoint: str | None = None,
+    id2label: dict[int, str] | None = None,
     **dfine_kwargs: Any,
 ):
     """Backward-compatible wrapper used by tests/scripts."""
@@ -181,6 +200,7 @@ def create_model(
         freeze_backbone=freeze_backbone,
         image_size=image_size,
         pretrained_checkpoint=pretrained_checkpoint,
+        id2label=id2label,
         **dfine_kwargs,
     )
     artifacts = factory.build()

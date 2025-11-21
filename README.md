@@ -3,8 +3,8 @@
 Modern document understanding needs both page-level accuracy and production-ready throughput. This project trains a ConvNeXt‑DINOv3 backbone paired with the D‑FINE detector, fine‑tunes on DocLayNet, and then distills into smaller D‑FINE variants (ConvNeXt Base / Small / Tiny). All tooling flows through `uv run doc-obj-detect …`, so dependencies stay reproducible and CUDA wheels are easy to swap.
 
 ## Highlights
-- **Teacher architecture:** ConvNeXt Large DINOv3 backbone feeding D-FINE (multi-scale encoder + FDR/GO-LSD decoder) with 300 queries.
-- **Aspect-preserving multiscale:** Short side sampled from `[512, 544, 576, 608, 640]`, long side capped at 928 px; evaluation always resizes to a fixed 640 px short side with no augmentation.
+- **Teacher architecture:** ConvNeXt Base DINOv3 backbone feeding D-FINE (keeps VRAM low enough for a 4-level stride pyramid) with 300 queries.
+- **Aspect-preserving multiscale:** Short side sampled from `[576, 608, 640]`, long side capped at 928 px; evaluation always resizes to a fixed 640 px short side with no augmentation.
 - **Students:** Smaller ConvNeXt backbones (Base / Small / Tiny) paired with D-FINE; distillation loss supports KL (with temperature) or MSE on logits plus optional box-level MSE.
 - **Datasets:** PubLayNet pretraining (5 classes) followed by DocLayNet finetuning (11 classes). Config schemas enforce sane ranges for image sizes, batch sizes, learning rates, multiscale settings, etc., so misconfigured runs fail fast.
 - **Configs:** `configs/pretrain_publaynet.yaml`, `configs/finetune_doclaynet.yaml`, and `configs/distill.yaml` describe the entire pipeline; modify YAML rather than editing code.
