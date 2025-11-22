@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from doc_obj_detect.data import DatasetFactory, collate_fn
 from doc_obj_detect.metrics import compute_map
@@ -56,6 +60,21 @@ class BaseRunner:
         if self._aug_config and self._aug_config.get("max_long_side"):
             size["longest_edge"] = self._aug_config["max_long_side"]
         return size
+
+    def _get_class_labels(self) -> dict[int, str]:
+        """Get class labels for the dataset without loading the full dataset."""
+
+        dataset_name = self.config.data.dataset.lower()
+        if dataset_name == "publaynet":
+            from doc_obj_detect.data.constants import PUBLAYNET_CLASSES
+
+            return PUBLAYNET_CLASSES
+        elif dataset_name == "doclaynet":
+            from doc_obj_detect.data.constants import DOCLAYNET_CLASSES
+
+            return DOCLAYNET_CLASSES
+        else:
+            raise ValueError(f"Unknown dataset: {dataset_name}")
 
     def _build_datasets(
         self,
@@ -113,7 +132,34 @@ class BaseRunner:
         setup_logging(run_paths.run_name, run_paths.log_dir)
         logger.info("TensorBoard run name: %s", run_paths.run_name)
         logger.info("Logs will be saved to: %s", run_paths.log_dir)
+        self._write_run_metadata(run_paths)
         return run_paths
+
+    def _write_run_metadata(self, run_paths: RunPaths) -> None:
+        """Persist the resolved configuration + run metadata for reproducibility."""
+
+        metadata_root = Path(run_paths.output_dir) / "run_metadata" / run_paths.run_name
+        metadata_root.mkdir(parents=True, exist_ok=True)
+
+        config_path = metadata_root / "config.yaml"
+        metadata_path = metadata_root / "meta.json"
+
+        config_dict = self.config.model_dump(mode="json")
+        with config_path.open("w", encoding="utf-8") as handle:
+            yaml.safe_dump(config_dict, handle, sort_keys=False)
+
+        metadata = {
+            "run_name": run_paths.run_name,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "config_path": str(self.config_path) if self.config_path else None,
+            "output_dir": str(run_paths.output_dir),
+            "log_dir": str(run_paths.log_dir),
+        }
+        with metadata_path.open("w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, indent=2)
+
+        logger.info("Saved config snapshot to %s", config_path)
+        logger.info("Saved run metadata to %s", metadata_path)
 
 
 __all__ = ["BaseRunner", "ProcessorBundle", "collate_fn"]

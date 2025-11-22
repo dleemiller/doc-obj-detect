@@ -38,8 +38,8 @@ class DetrConfig(BaseModel):
     encoder_ffn_dim: int = Field(default=1024, gt=0, description="Encoder FFN dimension")
     decoder_ffn_dim: int = Field(default=1024, gt=0, description="Decoder FFN dimension")
     num_feature_levels: int = Field(default=4, gt=0, description="Number of feature pyramid levels")
-    decoder_n_points: int = Field(
-        default=4, gt=0, description="Decoder deformable attention points"
+    decoder_n_points: int | list[int] = Field(
+        default=[3, 6, 3], description="Decoder deformable attention points (int or list per level)"
     )
     encoder_n_points: int = Field(
         default=4, gt=0, description="Encoder deformable attention points"
@@ -74,7 +74,9 @@ class DFineConfig(BaseModel):
     decoder_layers: int = Field(default=6, gt=0, description="Number of decoder layers")
     decoder_ffn_dim: int = Field(default=1024, gt=0, description="Decoder FFN dimension")
     decoder_attention_heads: int = Field(default=8, gt=0, description="Decoder attention heads")
-    decoder_n_points: int = Field(default=4, gt=0, description="Deformable attention points")
+    decoder_n_points: int | list[int] = Field(
+        default=[3, 6, 3], description="Deformable attention points (int or list per level)"
+    )
 
     # Loss weights
     weight_loss_vfl: float = Field(default=1.0, ge=0, description="VFL loss weight")
@@ -210,6 +212,21 @@ class AugmentationConfig(BaseModel):
         return self
 
 
+class EMAConfig(BaseModel):
+    """Exponential Moving Average configuration."""
+
+    enabled: bool = Field(default=False, description="Enable EMA for model weights")
+    decay: float = Field(
+        default=0.9999, ge=0, le=1, description="EMA decay rate (D-FINE default: 0.9999)"
+    )
+    warmup_steps: int = Field(
+        default=1000, ge=0, description="EMA warmup steps (D-FINE default: 1000)"
+    )
+    use_for_eval: bool = Field(
+        default=True, description="Use EMA weights for evaluation (recommended)"
+    )
+
+
 class TrainingConfig(BaseModel):
     """Training configuration - maps to HuggingFace TrainingArguments."""
 
@@ -240,6 +257,7 @@ class TrainingConfig(BaseModel):
         ge=1,
         description="Optional patience for EarlyStoppingCallback",
     )
+    ema: EMAConfig = Field(default_factory=EMAConfig, description="EMA configuration")
 
     model_config = {"extra": "allow"}  # Allow additional TrainingArguments params
 

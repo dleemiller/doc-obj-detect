@@ -14,7 +14,7 @@ def test_cli_train_dispatch(monkeypatch):
             calls["config"] = config_path
             return cls()
 
-        def run(self):
+        def run(self, resume_from_checkpoint=None):
             calls["run"] = True
 
     monkeypatch.setattr(cli_main, "TrainerRunner", DummyRunner)

@@ -4,19 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This project implements document object detection using vision transformers and DETR-based models. The goal is to achieve SOTA performance with a large perception encoder-based model, then distill to smaller, faster models suitable for production deployment.
+This project implements document object detection using ConvNeXt backbones with DINOv3 pretraining and D-FINE detection heads. The goal is to achieve SOTA performance with a ConvNeXt-Base model, then distill to smaller, faster variants suitable for production deployment.
 
 **Target Pipeline:**
 1. Pretrain on PubLayNet dataset
 2. Fine-tune on DocLayNet dataset
-3. Distill to smaller models (e.g., ConvNeXtV2 + RT-DETR)
+3. Distill to smaller models (ConvNeXt Tiny/Small + D-FINE)
 
 **Model Architecture:**
-- Backbone: Vision Transformer with Perception Encoder (ViT-PE Spatial Gigantic - 1.8B params)
-  - Model: timm/vit_pe_spatial_gigantic_patch14_448.fb
-  - Key insight: Uses intermediate layer features for optimal detection performance
-- Detection Head: Deformable DETR with multi-scale deformable attention (num_feature_levels=4)
-- Distillation targets: Smaller backbone/detection combinations for deployment (e.g., ConvNeXtV2 + RT-DETR)
+- Backbone: ConvNeXt-Base with DINOv3 pretraining (~89M params)
+  - Model: convnext_base.dinov3_lvd1689m
+  - Key insight: Self-supervised pretraining on 1.7B images provides strong dense prediction features
+- Detection Head: D-FINE with Fine-grained Distribution Refinement (num_feature_levels=4)
+- Distillation targets: Smaller ConvNeXt variants (Tiny/Small) + D-FINE for deployment
 
 ## Development Environment
 

@@ -8,6 +8,7 @@ from .bbox_stats import (
     plot_bbox_histograms,
     save_bbox_data,
 )
+from .cleanup import CleanupSummary, cleanup_outputs
 
 __all__ = [
     "collect_bbox_samples",
@@ -16,4 +17,6 @@ __all__ = [
     "compute_stride_ranges",
     "save_bbox_data",
     "load_bbox_data",
+    "cleanup_outputs",
+    "CleanupSummary",
 ]

@@ -12,7 +12,7 @@ from doc_obj_detect.config import TrainConfig, load_train_config
 from doc_obj_detect.data import collate_fn
 from doc_obj_detect.models import ModelFactory, get_trainable_parameters
 from doc_obj_detect.training.base_runner import BaseRunner, ProcessorBundle
-from doc_obj_detect.training.callbacks import UnfreezeBackboneCallback
+from doc_obj_detect.training.callbacks import EMACallback, UnfreezeBackboneCallback
 from doc_obj_detect.training.trainer_core import SplitLRTrainer
 from doc_obj_detect.utils import RunPaths
 
@@ -80,11 +80,17 @@ class TrainerRunner(BaseRunner):
         dfine_cfg = self.config.dfine.model_dump()
         image_size = self.config.data.image_size
 
+        # Get class labels before building model
+        class_labels = self._get_class_labels()
+        logger.info("Class labels for %s: %s", self.config.data.dataset, class_labels)
+
         logger.info("Initializing model...")
         logger.info("dfine_cfg num_feature_levels: %s", dfine_cfg.get("num_feature_levels"))
         logger.info("dfine_cfg encoder_in_channels: %s", dfine_cfg.get("encoder_in_channels"))
 
-        factory = ModelFactory.from_config(model_cfg, dfine_cfg, image_size=image_size)
+        factory = ModelFactory.from_config(
+            model_cfg, dfine_cfg, image_size=image_size, id2label=class_labels
+        )
         artifacts = factory.build()
         model = artifacts.model
         processor = artifacts.processor
@@ -116,6 +122,9 @@ class TrainerRunner(BaseRunner):
         paths = self._prepare_run_paths()
         training_config_dict = self.config.training.model_dump()
         early_stopping_patience = training_config_dict.pop("early_stopping_patience", None)
+        _ = training_config_dict.pop(
+            "ema", None
+        )  # Remove EMA config (not a TrainingArguments param)
 
         training_args = TrainingArguments(
             output_dir=str(paths.output_dir),
@@ -132,6 +141,22 @@ class TrainerRunner(BaseRunner):
         callbacks = []
         if early_stopping_patience is not None:
             callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
+
+        # Add EMA callback if enabled
+        if self.config.training.ema.enabled:
+            logger.info(
+                "EMA enabled: decay=%.4f, warmup_steps=%d, use_for_eval=%s",
+                self.config.training.ema.decay,
+                self.config.training.ema.warmup_steps,
+                self.config.training.ema.use_for_eval,
+            )
+            callbacks.append(
+                EMACallback(
+                    decay=self.config.training.ema.decay,
+                    warmup_steps=self.config.training.ema.warmup_steps,
+                    use_ema_for_eval=self.config.training.ema.use_for_eval,
+                )
+            )
 
         # Handle backbone freezing: either freeze_backbone or freeze_backbone_epochs
         if self.config.model.freeze_backbone_epochs is not None:
