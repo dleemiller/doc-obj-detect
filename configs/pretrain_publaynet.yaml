@@ -1,42 +1,56 @@
 # D-FINE Pretraining configuration for PubLayNet dataset
-# ConvNeXt-Base DINOv3 backbone + D-FINE detector head (fits 4 stride levels in 24 GB)
+# ConvNeXt-Large DINOv3 backbone + D-FINE detector head (3 stride levels)
 
 model:
-  backbone: "convnext_base.dinov3_lvd1689m"  # ConvNeXt-Base DINOv3 (~89M params) keeps VRAM in check
+  backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (~200M params)
   num_classes: 5  # PubLayNet: text, title, list, table, figure
   use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 weights (1.7B images, SOTA features)
   use_pretrained_head: false  # Reinitialize head because channel layout differs from the checkpoint
   freeze_backbone: true  # Let the decoder stabilize against frozen ConvNeXt features
-  freeze_backbone_epochs: 1  # Unfreeze after 1 epoch for full end-to-end training
+  freeze_backbone_epochs: 2  # Unfreeze after 1 epoch for full end-to-end training
 
 dfine:
-  # Backbone feature extraction (ConvNeXt-Base stages 0–3)
-  # Using 4 levels for better small object detection (page numbers, footnotes, formulas)
-  # D-FINE default is 3 levels {8, 16, 32}, but we use 4 {4, 8, 16, 32} for documents
-  encoder_in_channels: [128, 256, 512, 1024]  # ConvNeXt-Base channel dimensions
-  decoder_in_channels: [288, 288, 288, 288]  # Matches custom d_model setting (must align per level)
-  feat_strides: [4, 8, 16, 32]  # Feature pyramid strides
-  num_feature_levels: 4  # D-FINE standard: 3, but 4 levels needed for small objects in documents
+  # Backbone feature extraction (ConvNeXt-Large stages 1, 2, 3)
+  # Using 3 levels at strides {8, 16, 32} for memory efficiency
+  # Note: Must use consecutive stages for D-FINE FPN (requires 2x downsampling between levels)
+  # Trade-off: Skip C2 (stride 4) to reduce memory, standard D-FINE configuration
+  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-Large actual channel dimensions for stages 1, 2, 3
+  decoder_in_channels: [384, 384, 384]  # D-FINE-XLarge standard
+  feat_strides: [8, 16, 32]  # Feature pyramid strides (D-FINE standard)
+  num_feature_levels: 3  # 3 levels for standard D-FINE configuration
   backbone_kwargs:
-    out_indices: [0, 1, 2, 3]  # Extract from stages 0, 1, 2, 3 (C2, C3, C4, C5)
+    out_indices: [1, 2, 3]  # Extract from stages 1, 2, 3 (C3, C4, C5)
 
-  # Encoder configuration tuned for 4-level pyramid
-  encoder_hidden_dim: 288  # Slightly wider than D-FINE-L (256) to keep the extra level stable
+  # Encoder configuration (D-FINE-XLarge settings)
+  encoder_hidden_dim: 384  # D-FINE-XLarge
   encoder_layers: 1
-  encoder_ffn_dim: 1280  # Midpoint between the 1024 (L) and 2048 (X) templates
+  encoder_ffn_dim: 2048  # D-FINE-XLarge
   encoder_attention_heads: 8
   encoder_activation_function: "gelu"
 
-  # Decoder configuration
-  d_model: 288  # Custom width: 256 was too narrow for 4 levels; 384 was too expensive
+  # Decoder configuration (D-FINE-XLarge settings)
+  d_model: 256  # D-FINE-XLarge
   num_queries: 300  # Number of object queries
   decoder_layers: 6
-  decoder_ffn_dim: 1280  # Pair FFN size with encoder_hidden_dim for balanced capacity
+  decoder_ffn_dim: 1024  # D-FINE-XLarge
   decoder_attention_heads: 8
-  decoder_n_points: 4
-  decoder_activation_function: "silu"
+  decoder_n_points: [3, 6, 3]  # Sampling points per level: [S:stride8, M:stride16, L:stride32]
+  decoder_activation_function: "silu"  # Keep silu (vs XLarge's relu) for better performance
 
-  max_num_bins: 48
+  # Distribution refinement parameters
+  max_num_bins: 32  # D-FINE standard (reg_max)
+  reg_scale: 4.0  # Distribution scaling factor
+
+  # Additional D-FINE parameters
+  decoder_offset_scale: 0.5  # Offset scale for deformable attention
+  depth_mult: 1.0  # Depth multiplier for encoder
+  hidden_expansion: 1.0  # Hidden dimension expansion
+  focal_loss_alpha: 0.75  # Focal loss alpha
+  focal_loss_gamma: 2.0  # Focal loss gamma
+  use_focal_loss: true  # Use focal loss (Varifocal Loss)
+  with_box_refine: true  # Enable iterative box refinement
+  encode_proj_layers: [2]  # Encoder projection layers
+  layer_scale: 1  # Layer scaling factor
 
   # D-FINE specific losses (FDR + GO-LSD)
   weight_loss_vfl: 1.0  # Varifocal loss
@@ -45,27 +59,36 @@ dfine:
   weight_loss_fgl: 0.15  # Fine-grained localization
   weight_loss_ddf: 1.5  # Distribution distillation
 
+  # Hungarian matcher costs
+  matcher_class_cost: 2.0  # Classification cost
+  matcher_bbox_cost: 5.0  # L1 bbox cost
+  matcher_giou_cost: 2.0  # GIoU cost
+  matcher_alpha: 0.25  # Focal loss alpha for matcher
+  matcher_gamma: 2.0  # Focal loss gamma for matcher
+
   # Training features
   num_denoising: 100  # Denoising queries for training stability
+  label_noise_ratio: 0.5  # Label noise for denoising training
+  box_noise_scale: 1.0  # Box noise scale for denoising training
   auxiliary_loss: true  # Deep supervision
 
 data:
   dataset: "publaynet"
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
-  image_size: 512  # Standard document detection size
+  image_size: 640  # Standard document detection size
   batch_size: 16  # Trimmed from the 32-image D-FINE recipe to leave VRAM for the C2 feature map
   max_eval_samples: 1000
   num_workers: 4  # Reduced to avoid "too many open files"
 
 augmentation:
   # Multi-scale training for better scale invariance and small object detection
-  multi_scale_sizes: [576, 608, 640]
+  multi_scale_sizes: [512, 544, 576, 608, 640]
   max_long_side: 928
   rotate_limit: 3
   rotate_prob: 0.3
   perspective:
-    probability: 0.15
+    probability: 0.0
     scale_min: 0.02
     scale_max: 0.05
   elastic:
@@ -98,6 +121,7 @@ training:
   learning_rate: 1.25e-4  # Head LR after linear scaling from the 32-image reference run
 
   # Optimizer settings
+  optim: "adamw_torch_fused"  # Standard AdamW (D-FINE uses standard, not 8-bit)
   weight_decay: 1.25e-4  # Matches the official D-FINE configs; larger values over-regularize
 
   # Warmup and scheduling
@@ -108,10 +132,17 @@ training:
 
   # Gradient settings
   gradient_accumulation_steps: 1
-  max_grad_norm: 1.0  # Gradient clipping for stability
+  max_grad_norm: 0.1  # D-FINE standard (tighter clipping than DETR's 1.0)
 
   # Mixed precision
   bf16: true
+
+  # Exponential Moving Average (EMA) - D-FINE standard
+  ema:
+    enabled: true  # Enable EMA for better evaluation metrics
+    decay: 0.9999  # D-FINE default
+    warmup_steps: 1000  # D-FINE default
+    use_for_eval: true  # Use EMA weights for evaluation
 
   # Checkpointing and evaluation
   save_steps: 500

@@ -114,19 +114,23 @@ class SplitLRTrainer(Trainer):
             num_samples=len(dataloader.dataset),
         )
 
-    def log(self, logs):  # type: ignore[override]
+    def log(self, logs, start_time=None):  # type: ignore[override]
         """Log extra diagnostics such as VRAM usage."""
 
         if torch.cuda.is_available():
             device = torch.cuda.current_device()
             try:
-                mem_bytes = torch.cuda.max_memory_allocated(device)
+                mem_allocated = torch.cuda.max_memory_allocated(device)
+                mem_reserved = torch.cuda.memory_reserved(device)
+                mem_current = torch.cuda.memory_allocated(device)
             except RuntimeError:
-                mem_bytes = 0
+                mem_allocated = mem_reserved = mem_current = 0
 
-            if mem_bytes > 0:
+            if mem_allocated > 0:
                 metric_prefix = "eval" if any(key.startswith("eval") for key in logs) else "train"
-                logs.setdefault(f"{metric_prefix}_vram_mb", mem_bytes / (1024**2))
+                logs.setdefault(f"{metric_prefix}_vram_peak_mb", mem_allocated / (1024**2))
+                logs.setdefault(f"{metric_prefix}_vram_reserved_mb", mem_reserved / (1024**2))
+                logs.setdefault(f"{metric_prefix}_vram_current_mb", mem_current / (1024**2))
             torch.cuda.reset_peak_memory_stats(device)
 
-        return super().log(logs)
+        return super().log(logs, start_time)

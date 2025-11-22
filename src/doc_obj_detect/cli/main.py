@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> None:
+    ## Reduce memory fragmentation by limiting block splitting
+    ## This keeps reserved memory closer to actual peak allocation
+    # os.environ.setdefault(
+    #    "PYTORCH_ALLOC_CONF",
+    #    "max_split_size_mb:512",
+    # )
+
     parser = argparse.ArgumentParser(prog="doc-obj-detect", description="Unified CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -135,6 +142,12 @@ def _add_cleanup_parser(subparsers):
         action="store_true",
         help="Show directories that would be removed without deleting anything",
     )
+    parser.add_argument(
+        "--min-tb-log-size",
+        type=int,
+        default=50,
+        help="Minimum TensorBoard log size in KB to keep (default: 50KB)",
+    )
     parser.set_defaults(handler=_handle_cleanup)
 
 
@@ -230,35 +243,57 @@ def _handle_bbox_hist(args):
 def _handle_cleanup(args):
     roots = args.roots or ["outputs"]
     total_removed = 0
+    total_tb_logs_removed = 0
 
     for root in roots:
-        summary = cleanup_outputs(root, dry_run=args.dry_run)
+        summary = cleanup_outputs(
+            root, dry_run=args.dry_run, min_tb_log_size_kb=args.min_tb_log_size
+        )
         if not summary.root.exists():
             logger.warning("Root %s does not exist. Skipping.", summary.root)
             continue
 
-        if not summary.candidates:
-            logger.info("No incomplete runs found under %s", summary.root)
+        if not summary.candidates and not summary.tb_log_candidates:
+            logger.info(
+                "No incomplete runs or minimal TensorBoard logs found under %s", summary.root
+            )
             continue
 
         if args.dry_run:
-            logger.info(
-                "[dry-run] Would remove %d directories under %s",
-                len(summary.candidates),
-                summary.root,
-            )
-            for path in summary.candidates:
-                logger.info("  %s", path)
+            if summary.candidates:
+                msg = f"[dry-run] Would remove {len(summary.candidates)} incomplete run(s) under {summary.root}"
+                logger.info(msg)
+                print(msg)
+                for path in summary.candidates:
+                    item_msg = f"  {path}"
+                    logger.info(item_msg)
+                    print(item_msg)
+
+            if summary.tb_log_candidates:
+                tb_msg = f"[dry-run] Would remove {len(summary.tb_log_candidates)} minimal TensorBoard log(s) (< {args.min_tb_log_size}KB)"
+                logger.info(tb_msg)
+                print(tb_msg)
+                for path in summary.tb_log_candidates:
+                    item_msg = f"  {path}"
+                    logger.info(item_msg)
+                    print(item_msg)
         else:
-            logger.info(
-                "Removing %d directories under %s",
-                len(summary.removed),
-                summary.root,
-            )
-            total_removed += len(summary.removed)
+            if summary.removed:
+                msg = f"Removed {len(summary.removed)} incomplete run(s) under {summary.root}"
+                logger.info(msg)
+                print(msg)
+                total_removed += len(summary.removed)
+
+            if summary.tb_logs_removed:
+                tb_msg = f"Removed {len(summary.tb_logs_removed)} minimal TensorBoard log(s)"
+                logger.info(tb_msg)
+                print(tb_msg)
+                total_tb_logs_removed += len(summary.tb_logs_removed)
 
     if not args.dry_run:
-        logger.info("Cleanup complete. Removed %d directories.", total_removed)
+        msg = f"Cleanup complete. Removed {total_removed} run(s) and {total_tb_logs_removed} TensorBoard log(s)."
+        logger.info(msg)
+        print(msg)
 
 
 if __name__ == "__main__":  # pragma: no cover

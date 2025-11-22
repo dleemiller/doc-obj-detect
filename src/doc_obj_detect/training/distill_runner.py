@@ -84,6 +84,9 @@ class DistillRunner(BaseRunner):
     def _build_training_args(self, run_paths):
         training_config_dict = self.config.training.model_dump()
         early_stopping_patience = training_config_dict.pop("early_stopping_patience", None)
+        _ = training_config_dict.pop(
+            "ema", None
+        )  # Remove EMA config (not a TrainingArguments param)
         training_args = TrainingArguments(
             output_dir=str(run_paths.output_dir),
             run_name=run_paths.run_name,

@@ -163,6 +163,9 @@ class ModelFactory:
                     processor_id,
                     do_resize=False,
                     do_pad=True,
+                    do_normalize=True,  # CRITICAL: Enable normalization for pretrained backbone
+                    image_mean=[0.485, 0.456, 0.406],  # ImageNet mean (DINOv3 standard)
+                    image_std=[0.229, 0.224, 0.225],  # ImageNet std (DINOv3 standard)
                     size={"height": self.image_size, "width": self.image_size},
                 )
                 if processor_id != self.processor_candidates[0]:

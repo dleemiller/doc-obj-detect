@@ -22,7 +22,7 @@ class DummyTrainer:
     def __init__(self, *_, **kwargs):
         DummyTrainer.init_kwargs = kwargs
 
-    def train(self):
+    def train(self, resume_from_checkpoint=None):
         DummyTrainer.train_called = True
 
     def save_model(self, path):
