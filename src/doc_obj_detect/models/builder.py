@@ -135,16 +135,18 @@ class ModelFactory:
         model: DFineForObjectDetection,
         checkpoint_path: str | Path,
         strict: bool = False,
+        prefer_ema: bool = True,
     ) -> None:
         """Load model weights from a checkpoint (for --load flag).
 
-        This method loads ONLY model weights (no EMA, no optimizer state).
+        This method loads ONLY model weights (no optimizer state, no trainer state).
         Use this when you want to start new training with pretrained weights.
 
         Args:
             model: The model to load weights into
             checkpoint_path: Path to checkpoint directory or .pt/.bin file
             strict: Whether to require exact key matching (default: False)
+            prefer_ema: If True and EMA weights exist, load those instead (default: True)
 
         Raises:
             FileNotFoundError: If checkpoint not found
@@ -153,7 +155,54 @@ class ModelFactory:
 
         # Handle both checkpoint directories and direct file paths
         if checkpoint_path.is_dir():
-            # Try common checkpoint file names
+            # Check for EMA weights first if preferred
+            if prefer_ema:
+                ema_path = checkpoint_path / "ema_state.pt"
+                if ema_path.exists():
+                    logger.info("Loading EMA weights from: %s", ema_path)
+                    ema_state = torch.load(ema_path, map_location="cpu")
+                    # EMA state dict can have different keys depending on implementation
+                    # EMACallback saves with 'module' key (callbacks.py:169)
+                    # Some implementations use 'shadow_params'
+                    if "module" in ema_state:
+                        state_dict = ema_state["module"]
+                        logger.info("Found EMA weights under 'module' key")
+                    elif "shadow_params" in ema_state:
+                        state_dict = ema_state["shadow_params"]
+                        logger.info("Found EMA weights under 'shadow_params' key")
+                    else:
+                        # Assume the entire state dict is the model weights
+                        state_dict = ema_state
+                        logger.info("Using entire EMA state as model weights")
+
+                    filtered_state_dict = {}
+                    skipped_keys = []
+                    model_state = model.state_dict()
+
+                    for key, value in state_dict.items():
+                        if key not in model_state:
+                            skipped_keys.append(f"{key} (not in model)")
+                            continue
+                        if value.shape != model_state[key].shape:
+                            skipped_keys.append(
+                                f"{key} (shape mismatch: {value.shape} vs {model_state[key].shape})"
+                            )
+                            continue
+                        filtered_state_dict[key] = value
+
+                    model.load_state_dict(filtered_state_dict, strict=strict)
+                    logger.info(
+                        "Loaded %d/%d EMA keys from checkpoint (%d skipped)",
+                        len(filtered_state_dict),
+                        len(state_dict),
+                        len(skipped_keys),
+                    )
+                    if skipped_keys and len(skipped_keys) <= 5:
+                        for key_msg in skipped_keys:
+                            logger.info("  Skipped: %s", key_msg)
+                    return
+
+            # Fall back to regular model weights
             candidates = [
                 checkpoint_path / "model.safetensors",
                 checkpoint_path / "pytorch_model.bin",
@@ -175,9 +224,7 @@ class ModelFactory:
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-        logger.info(
-            "Loading weights from checkpoint: %s (weights only, no EMA/optimizer)", checkpoint_path
-        )
+        logger.info("Loading weights from checkpoint: %s", checkpoint_path)
 
         state_dict = torch.load(checkpoint_path, map_location="cpu")
         filtered_state_dict = {}

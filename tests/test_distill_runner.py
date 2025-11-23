@@ -16,7 +16,7 @@ def build_distill_config(tmp_path):
     teacher = TeacherConfig(
         checkpoint=str(tmp_path / "teacher"), backbone="large", detector="dfine"
     )
-    model_cfg = ModelConfig(backbone="base", num_classes=2)
+    model_cfg = ModelConfig(backbone="base", architecture="dfine_small", num_classes=2)
     dfine_cfg = DFineConfig()
     distill_cfg = DistillationConfig(loss_type="mse", temperature=1.0, alpha=0.5, beta=0.5)
     data_cfg = DataConfig(

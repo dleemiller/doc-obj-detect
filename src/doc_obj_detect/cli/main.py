@@ -61,7 +61,12 @@ def _add_train_parser(subparsers):
         "--load",
         type=str,
         default=None,
-        help="Load model weights only from checkpoint (starts new training with fresh optimizer/scheduler, no EMA)",
+        help="Load model weights only from checkpoint (starts new training with fresh optimizer/scheduler)",
+    )
+    parser.add_argument(
+        "--no-ema",
+        action="store_true",
+        help="When using --load, load regular weights instead of EMA weights (if available)",
     )
     parser.set_defaults(handler=_handle_train)
 
@@ -177,6 +182,7 @@ def _handle_train(args):
     runner.run(
         resume_from_checkpoint=args.resume_from_checkpoint,
         load_weights_from=args.load,
+        prefer_ema=not args.no_ema,
     )
 
 

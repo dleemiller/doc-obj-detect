@@ -37,6 +37,7 @@ class TrainerRunner(BaseRunner):
         self,
         resume_from_checkpoint: str | Path | None = None,
         load_weights_from: str | Path | None = None,
+        prefer_ema: bool = True,
     ) -> None:
         """Run training with one of three modes:
 
@@ -47,12 +48,15 @@ class TrainerRunner(BaseRunner):
         Args:
             resume_from_checkpoint: Checkpoint to resume from (full state)
             load_weights_from: Checkpoint to load weights from (weights only)
+            prefer_ema: When loading weights, prefer EMA weights if available (default: True)
         """
         logger.info("=" * 80)
         logger.info("Training Configuration")
         logger.info("=" * 80)
 
-        model, processors = self._build_model_and_processors(load_weights_from=load_weights_from)
+        model, processors = self._build_model_and_processors(
+            load_weights_from=load_weights_from, prefer_ema=prefer_ema
+        )
         train_dataset, val_dataset, class_labels = self._build_datasets(processors)
         training_args, callbacks, run_paths = self._build_training_args(model)
 
@@ -132,12 +136,15 @@ class TrainerRunner(BaseRunner):
     # Builders
     # ------------------------------------------------------------------
     def _build_model_and_processors(
-        self, load_weights_from: str | Path | None = None
+        self,
+        load_weights_from: str | Path | None = None,
+        prefer_ema: bool = True,
     ) -> tuple[torch.nn.Module, ProcessorBundle]:
         """Build model and processors.
 
         Args:
             load_weights_from: Optional checkpoint to load weights from (--load flag)
+            prefer_ema: When loading weights, prefer EMA weights if available (default: True)
 
         Returns:
             Model and processor bundle
@@ -163,7 +170,7 @@ class TrainerRunner(BaseRunner):
 
         # Load weights if --load flag provided
         if load_weights_from:
-            ModelFactory.load_from_checkpoint(model, load_weights_from)
+            ModelFactory.load_from_checkpoint(model, load_weights_from, prefer_ema=prefer_ema)
 
         param_info = get_trainable_parameters(model)
         logger.info("Total parameters: %s", f"{param_info['total']:,}")

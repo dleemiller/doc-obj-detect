@@ -71,6 +71,7 @@ class DummyModelFactory:
 def build_train_config(tmp_path) -> TrainConfig:
     model_cfg = ModelConfig(
         backbone="dummy",
+        architecture="dfine_small",
         num_classes=2,
         use_pretrained_backbone=False,
         freeze_backbone=False,

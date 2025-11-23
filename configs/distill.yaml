@@ -7,6 +7,7 @@ teacher:
 
 model:
   backbone: "convnext_base.dinov2"  # student backbone variant
+  architecture: dfine_large  # Student architecture
   num_classes: 11
   use_pretrained_backbone: true
   freeze_backbone: false
