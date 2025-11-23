@@ -3,74 +3,24 @@
 
 model:
   backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (~200M params)
+  architecture: dfine_xlarge  # D-FINE XLarge architecture (see configs/architectures/dfine_xlarge.yaml)
   num_classes: 5  # PubLayNet: text, title, list, table, figure
   use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 weights (1.7B images, SOTA features)
-  use_pretrained_head: false  # Reinitialize head because channel layout differs from the checkpoint
   freeze_backbone: true  # Let the decoder stabilize against frozen ConvNeXt features
-  freeze_backbone_epochs: 2  # Unfreeze after 1 epoch for full end-to-end training
+  freeze_backbone_epochs: 2  # Unfreeze after 2 epochs for full end-to-end training
 
 dfine:
-  # Backbone feature extraction (ConvNeXt-Large stages 1, 2, 3)
+  # Backbone-specific configuration (depends on chosen backbone)
   # Using 3 levels at strides {8, 16, 32} for memory efficiency
   # Note: Must use consecutive stages for D-FINE FPN (requires 2x downsampling between levels)
-  # Trade-off: Skip C2 (stride 4) to reduce memory, standard D-FINE configuration
-  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-Large actual channel dimensions for stages 1, 2, 3
-  decoder_in_channels: [384, 384, 384]  # D-FINE-XLarge standard
-  feat_strides: [8, 16, 32]  # Feature pyramid strides (D-FINE standard)
+  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-Large channel dimensions for stages 1, 2, 3
+  feat_strides: [8, 16, 32]  # Feature pyramid strides
   num_feature_levels: 3  # 3 levels for standard D-FINE configuration
   backbone_kwargs:
     out_indices: [1, 2, 3]  # Extract from stages 1, 2, 3 (C3, C4, C5)
 
-  # Encoder configuration (D-FINE-XLarge settings)
-  encoder_hidden_dim: 384  # D-FINE-XLarge
-  encoder_layers: 1
-  encoder_ffn_dim: 2048  # D-FINE-XLarge
-  encoder_attention_heads: 8
-  encoder_activation_function: "gelu"
-
-  # Decoder configuration (D-FINE-XLarge settings)
-  d_model: 256  # D-FINE-XLarge
-  num_queries: 300  # Number of object queries
-  decoder_layers: 6
-  decoder_ffn_dim: 1024  # D-FINE-XLarge
-  decoder_attention_heads: 8
-  decoder_n_points: [3, 6, 3]  # Sampling points per level: [S:stride8, M:stride16, L:stride32]
-  decoder_activation_function: "silu"  # Keep silu (vs XLarge's relu) for better performance
-
-  # Distribution refinement parameters
-  max_num_bins: 32  # D-FINE standard (reg_max)
-  reg_scale: 4.0  # Distribution scaling factor
-
-  # Additional D-FINE parameters
-  decoder_offset_scale: 0.5  # Offset scale for deformable attention
-  depth_mult: 1.0  # Depth multiplier for encoder
-  hidden_expansion: 1.0  # Hidden dimension expansion
-  focal_loss_alpha: 0.75  # Focal loss alpha
-  focal_loss_gamma: 2.0  # Focal loss gamma
-  use_focal_loss: true  # Use focal loss (Varifocal Loss)
-  with_box_refine: true  # Enable iterative box refinement
-  encode_proj_layers: [2]  # Encoder projection layers
-  layer_scale: 1  # Layer scaling factor
-
-  # D-FINE specific losses (FDR + GO-LSD)
-  weight_loss_vfl: 1.0  # Varifocal loss
-  weight_loss_bbox: 5.0  # L1 bbox loss
-  weight_loss_giou: 2.0  # GIoU loss
-  weight_loss_fgl: 0.15  # Fine-grained localization
-  weight_loss_ddf: 1.5  # Distribution distillation
-
-  # Hungarian matcher costs
-  matcher_class_cost: 2.0  # Classification cost
-  matcher_bbox_cost: 5.0  # L1 bbox cost
-  matcher_giou_cost: 2.0  # GIoU cost
-  matcher_alpha: 0.25  # Focal loss alpha for matcher
-  matcher_gamma: 2.0  # Focal loss gamma for matcher
-
-  # Training features
-  num_denoising: 100  # Denoising queries for training stability
-  label_noise_ratio: 0.5  # Label noise for denoising training
-  box_noise_scale: 1.0  # Box noise scale for denoising training
-  auxiliary_loss: true  # Deep supervision
+  # Architecture-specific parameters loaded from configs/architectures/dfine_xlarge.yaml
+  # Can override here if needed, but defaults from architecture file are recommended
 
 data:
   dataset: "publaynet"
@@ -83,7 +33,7 @@ data:
 
 augmentation:
   # Multi-scale training for better scale invariance and small object detection
-  multi_scale_sizes: [512, 544, 576, 608, 640]
+  multi_scale_sizes: [576, 608, 640]
   max_long_side: 928
   rotate_limit: 3
   rotate_prob: 0.3
@@ -116,9 +66,8 @@ training:
   num_train_epochs: 12
 
   # Learning rates follow the D-FINE schedule scaled to batch_size=16 (base 2.5e-4 → 1.25e-4)
-  # SplitLRTrainer applies a 0.01 multiplier to the ConvNeXt backbone so the frozen warm-up
-  # does not destroy the strong DINOv3 features.
   learning_rate: 1.25e-4  # Head LR after linear scaling from the 32-image reference run
+  backbone_lr_multiplier: 0.01  # Backbone LR = 1% of head LR (1.25e-6) to preserve DINOv3 features
 
   # Optimizer settings
   optim: "adamw_torch_fused"  # Standard AdamW (D-FINE uses standard, not 8-bit)
@@ -132,7 +81,9 @@ training:
 
   # Gradient settings
   gradient_accumulation_steps: 1
-  max_grad_norm: 0.1  # D-FINE standard (tighter clipping than DETR's 1.0)
+  max_grad_norm: 0.1  # D-FINE standard (global fallback, not used when separate norms specified)
+  backbone_max_grad_norm: 0.1  # Separate clipping prevents starvation; LR multiplier (0.01) controls update magnitude
+  head_max_grad_norm: 0.1  # D-FINE standard for encoder/decoder/detection head
 
   # Mixed precision
   bf16: true
@@ -157,7 +108,7 @@ training:
   push_to_hub: false
 
 output:
-  output_dir: "outputs/pretrain_publaynet_dfine"
-  checkpoint_dir: "outputs/pretrain_publaynet_dfine/checkpoints"
-  log_dir: "outputs/pretrain_publaynet_dfine/logs"
+  output_dir: "outputs/pretrain_publaynet_dfine_phase2"
+  checkpoint_dir: "outputs/pretrain_publaynet_dfine_phase2/checkpoints"
+  log_dir: "outputs/pretrain_publaynet_dfine_phase2/logs"
   run_name: "multiscale_lr1.25e-4_bs16_12ep"  # Unique name for TensorBoard (or use timestamp if null)

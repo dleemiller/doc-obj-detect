@@ -17,7 +17,48 @@ class SplitLRTrainer(Trainer):
     In addition to the optimizer change, evaluation is overridden so we can
     accumulate raw logits/boxes for document-detection metrics without flattening
     nested tensors the way the stock Trainer does.
+
+    Attributes:
+        backbone_lr_multiplier: Learning rate multiplier for backbone parameters.
+            Defaults to 0.01 (1% of head LR) to preserve pretrained representations.
+        backbone_max_grad_norm: Gradient clipping norm for backbone parameters.
+            If None, uses args.max_grad_norm.
+        head_max_grad_norm: Gradient clipping norm for head parameters.
+            If None, uses args.max_grad_norm.
     """
+
+    def __init__(
+        self,
+        *args,
+        backbone_lr_multiplier: float = 0.01,
+        backbone_max_grad_norm: float | None = None,
+        head_max_grad_norm: float | None = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.backbone_lr_multiplier = backbone_lr_multiplier
+
+        # Use separate norms if provided, otherwise fall back to global max_grad_norm
+        self.backbone_max_grad_norm = backbone_max_grad_norm or self.args.max_grad_norm
+        self.head_max_grad_norm = head_max_grad_norm or self.args.max_grad_norm
+        self.use_separate_grad_norms = (
+            backbone_max_grad_norm is not None or head_max_grad_norm is not None
+        )
+
+        logger.info(
+            "SplitLRTrainer initialized with backbone_lr_multiplier=%.4f",
+            self.backbone_lr_multiplier,
+        )
+        if self.use_separate_grad_norms:
+            logger.info(
+                "Using separate gradient clipping: backbone=%.3f, head=%.3f",
+                self.backbone_max_grad_norm,
+                self.head_max_grad_norm,
+            )
+        else:
+            logger.info(
+                "Using global gradient clipping: max_grad_norm=%.3f", self.args.max_grad_norm
+            )
 
     def create_optimizer(self):  # type: ignore[override]
         if self.optimizer is not None:
@@ -35,16 +76,119 @@ class SplitLRTrainer(Trainer):
 
         optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args)
         base_lr = self.args.learning_rate
-        # ConvNeXt-DINOv3 backbones are substantially heavier than the HGNetV2 family used
-        # in the original D-FINE paper, so we treat them like the X-large variant and keep
-        # a conservative 0.01 LR multiplier to preserve their pretrained representations.
+        backbone_lr = base_lr * self.backbone_lr_multiplier
+
+        # Count actual parameters (scalars), not just tensors
+        backbone_param_count = sum(p.numel() for p in backbone_params)
+        head_param_count = sum(p.numel() for p in other_params)
+
+        logger.info("Creating optimizer with split learning rates:")
+        logger.info("  Head LR: %.2e", base_lr)
+        logger.info(
+            "  Backbone LR: %.2e (%.2f%% of head LR)",
+            backbone_lr,
+            self.backbone_lr_multiplier * 100,
+        )
+        logger.info("  Backbone params: %s", f"{backbone_param_count:,}")
+        logger.info("  Head params: %s", f"{head_param_count:,}")
+
         optimizer_grouped_parameters = [
             {"params": other_params, "lr": base_lr},
-            {"params": backbone_params, "lr": base_lr * 0.01},  # 2.5e-6 for base_lr=2.5e-4
+            {"params": backbone_params, "lr": backbone_lr},
         ]
 
         self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
         return self.optimizer
+
+    def training_step(self, model, inputs, num_items_in_batch=None):  # type: ignore[override]
+        """Override training step to add custom gradient clipping."""
+        # Call parent training_step which handles forward, backward, etc.
+        loss = super().training_step(model, inputs, num_items_in_batch)
+
+        # Apply custom gradient clipping after backward pass
+        if self.use_separate_grad_norms:
+            self._clip_gradients_custom(model)
+
+        return loss
+
+    def _clip_gradients_custom(self, model):
+        """Custom gradient clipping that separates backbone and head gradients.
+
+        This prevents the large backbone gradients from dominating the gradient budget
+        and starving the head of updates when global gradient clipping is applied.
+        """
+        # Unwrap model if using DDP/FSDP
+        if hasattr(model, "module"):
+            model = model.module
+
+        # Separate parameters into backbone vs head
+        backbone_params = []
+        head_params = []
+
+        for name, param in model.named_parameters():
+            if param.grad is None:
+                continue
+            if "model.backbone" in name or "backbone" in name:
+                backbone_params.append(param)
+            else:
+                head_params.append(param)
+
+        # Clip each group independently
+        # clip_grad_norm_ returns the TOTAL NORM BEFORE CLIPPING
+        backbone_norm_before = 0.0
+        head_norm_before = 0.0
+
+        if backbone_params:
+            backbone_norm_before = torch.nn.utils.clip_grad_norm_(
+                backbone_params, max_norm=self.backbone_max_grad_norm
+            ).item()
+
+        if head_params:
+            head_norm_before = torch.nn.utils.clip_grad_norm_(
+                head_params, max_norm=self.head_max_grad_norm
+            ).item()
+
+        # Log gradient norms periodically (every 100 steps)
+        if self.state.global_step % 100 == 0:
+            logger.info(
+                "Gradient norms BEFORE clipping: backbone=%.3f, head=%.3f",
+                backbone_norm_before,
+                head_norm_before,
+            )
+            logger.info(
+                "Clipping to: backbone_max=%.3f, head_max=%.3f",
+                self.backbone_max_grad_norm,
+                self.head_max_grad_norm,
+            )
+
+            # Log clipping actions
+            if backbone_norm_before > self.backbone_max_grad_norm:
+                logger.info(
+                    "  → Backbone gradients CLIPPED (%.3f → %.3f, scale=%.3f)",
+                    backbone_norm_before,
+                    self.backbone_max_grad_norm,
+                    self.backbone_max_grad_norm / backbone_norm_before,
+                )
+            elif backbone_norm_before > 0:
+                logger.info(
+                    "  → Backbone gradients unchanged (%.3f < %.3f)",
+                    backbone_norm_before,
+                    self.backbone_max_grad_norm,
+                )
+
+            if head_norm_before > self.head_max_grad_norm:
+                logger.info(
+                    "  → Head gradients CLIPPED (%.3f → %.3f, scale=%.3f)",
+                    head_norm_before,
+                    self.head_max_grad_norm,
+                    self.head_max_grad_norm / head_norm_before,
+                )
+            elif head_norm_before > 0:
+                logger.info(
+                    "  → Head gradients unchanged (%.3f < %.3f)",
+                    head_norm_before,
+                    self.head_max_grad_norm,
+                )
 
     def get_eval_dataloader(self, eval_dataset=None):  # type: ignore[override]
         original_num_workers = self.args.dataloader_num_workers

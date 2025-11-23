@@ -7,6 +7,9 @@ class ModelConfig(BaseModel):
     """Model configuration."""
 
     backbone: str = Field(description="Backbone model name from timm")
+    architecture: str = Field(
+        description="D-FINE architecture variant (e.g., 'dfine_xlarge', 'dfine_large')"
+    )
     num_classes: int = Field(gt=0, description="Number of object detection classes")
     freeze_backbone: bool = Field(
         default=False, description="Whether to freeze backbone parameters"
@@ -18,12 +21,6 @@ class ModelConfig(BaseModel):
     )
     use_pretrained_backbone: bool = Field(
         default=True, description="Use pretrained backbone weights"
-    )
-    use_pretrained_head: bool = Field(
-        default=True, description="Use pretrained D-FINE head weights (False = train from scratch)"
-    )
-    pretrained_checkpoint: str | None = Field(
-        default=None, description="Path to pretrained checkpoint"
     )
 
 
@@ -48,10 +45,93 @@ class DetrConfig(BaseModel):
     model_config = {"extra": "allow"}  # Allow additional DETR config params
 
 
-class DFineConfig(BaseModel):
-    """D-FINE architecture configuration."""
+class ArchitectureConfig(BaseModel):
+    """Architecture-only parameters (loaded from configs/architectures/*.yaml).
 
-    # Backbone config
+    These parameters are architecture-specific and don't change across training phases.
+    They're separated from backbone-specific params (encoder_in_channels, feat_strides)
+    which depend on the chosen backbone.
+    """
+
+    # Decoder input channels (standardized across feature levels)
+    decoder_in_channels: list[int] = Field(
+        default=[384, 384, 384], description="Decoder input channels for each level"
+    )
+
+    # Encoder config
+    encoder_hidden_dim: int = Field(default=256, gt=0, description="Encoder hidden dimension")
+    encoder_layers: int = Field(default=1, gt=0, description="Number of encoder layers")
+    encoder_ffn_dim: int = Field(default=1024, gt=0, description="Encoder FFN dimension")
+    encoder_attention_heads: int = Field(default=8, gt=0, description="Encoder attention heads")
+    encoder_activation_function: str = Field(
+        default="gelu", description="Encoder activation function"
+    )
+
+    # Decoder config
+    d_model: int = Field(default=256, gt=0, description="Decoder model dimension")
+    num_queries: int = Field(default=300, gt=0, description="Number of object queries")
+    decoder_layers: int = Field(default=6, gt=0, description="Number of decoder layers")
+    decoder_ffn_dim: int = Field(default=1024, gt=0, description="Decoder FFN dimension")
+    decoder_attention_heads: int = Field(default=8, gt=0, description="Decoder attention heads")
+    decoder_n_points: int | list[int] = Field(
+        default=[3, 6, 3], description="Deformable attention points (int or list per level)"
+    )
+    decoder_activation_function: str = Field(
+        default="relu", description="Decoder activation function"
+    )
+
+    # Distribution refinement parameters
+    max_num_bins: int = Field(default=32, gt=0, description="Maximum number of bins (reg_max)")
+    reg_scale: float = Field(default=4.0, gt=0, description="Distribution scaling factor")
+
+    # Additional D-FINE parameters
+    decoder_offset_scale: float = Field(
+        default=0.5, gt=0, description="Offset scale for deformable attention"
+    )
+    depth_mult: float = Field(default=1.0, gt=0, description="Depth multiplier")
+    hidden_expansion: float = Field(default=1.0, gt=0, description="Hidden dimension expansion")
+    focal_loss_alpha: float = Field(default=0.75, ge=0, le=1, description="Focal loss alpha")
+    focal_loss_gamma: float = Field(default=2.0, ge=0, description="Focal loss gamma")
+    use_focal_loss: bool = Field(default=True, description="Use focal loss (Varifocal Loss)")
+    with_box_refine: bool = Field(default=True, description="Enable iterative box refinement")
+    encode_proj_layers: list[int] = Field(default=[2], description="Encoder projection layers")
+    layer_scale: int = Field(default=1, description="Layer scaling factor")
+
+    # Loss weights
+    weight_loss_vfl: float = Field(default=1.0, ge=0, description="VFL loss weight")
+    weight_loss_bbox: float = Field(default=5.0, ge=0, description="BBox L1 loss weight")
+    weight_loss_giou: float = Field(default=2.0, ge=0, description="GIoU loss weight")
+    weight_loss_fgl: float = Field(default=0.15, ge=0, description="FGL loss weight")
+    weight_loss_ddf: float = Field(default=1.5, ge=0, description="DDF loss weight")
+
+    # Hungarian matcher costs
+    matcher_class_cost: float = Field(default=2.0, ge=0, description="Classification cost")
+    matcher_bbox_cost: float = Field(default=5.0, ge=0, description="L1 bbox cost")
+    matcher_giou_cost: float = Field(default=2.0, ge=0, description="GIoU cost")
+    matcher_alpha: float = Field(
+        default=0.25, ge=0, le=1, description="Focal loss alpha for matcher"
+    )
+    matcher_gamma: float = Field(default=2.0, ge=0, description="Focal loss gamma for matcher")
+
+    # Training config
+    num_denoising: int = Field(default=100, ge=0, description="Number of denoising queries")
+    label_noise_ratio: float = Field(
+        default=0.5, ge=0, le=1, description="Label noise ratio for denoising"
+    )
+    box_noise_scale: float = Field(default=1.0, ge=0, description="Box noise scale for denoising")
+    auxiliary_loss: bool = Field(default=True, description="Use auxiliary decoding losses")
+
+    model_config = {"extra": "allow"}  # Allow additional architecture params
+
+
+class DFineConfig(BaseModel):
+    """D-FINE complete configuration (backbone-specific + architecture).
+
+    This combines backbone-specific parameters (which depend on the chosen backbone)
+    with architecture parameters (loaded from configs/architectures/*.yaml).
+    """
+
+    # Backbone-specific config (depends on chosen backbone)
     encoder_in_channels: list[int] = Field(
         default=[384, 768, 1536], description="Backbone output channels for each level"
     )
@@ -60,6 +140,12 @@ class DFineConfig(BaseModel):
     backbone_kwargs: dict = Field(
         default_factory=lambda: {"out_indices": (1, 2, 3)},
         description="Backbone keyword arguments",
+    )
+
+    # Architecture-specific config (inherits all fields from ArchitectureConfig)
+    # These will be populated by merging with the architecture config file
+    decoder_in_channels: list[int] = Field(
+        default=[384, 384, 384], description="Decoder input channels for each level"
     )
 
     # Encoder config
@@ -232,6 +318,12 @@ class TrainingConfig(BaseModel):
 
     num_train_epochs: int = Field(gt=0, le=1000, description="Number of training epochs")
     learning_rate: float = Field(gt=0, le=1.0, description="Learning rate")
+    backbone_lr_multiplier: float = Field(
+        default=0.01,
+        gt=0,
+        le=1.0,
+        description="Learning rate multiplier for backbone parameters (e.g., 0.01 = 1% of head LR)",
+    )
     weight_decay: float = Field(ge=0, le=1.0, description="Weight decay")
     # warmup_steps: int | None = Field(default=None, ge=0, description="Warmup steps (optional)")
     warmup_ratio: float | None = Field(
@@ -239,6 +331,21 @@ class TrainingConfig(BaseModel):
     )
     gradient_accumulation_steps: int = Field(
         default=1, gt=0, le=8192, description="Gradient accumulation steps"
+    )
+    max_grad_norm: float = Field(
+        default=0.1,
+        gt=0,
+        description="Global gradient clipping norm (used if separate norms not specified)",
+    )
+    backbone_max_grad_norm: float | None = Field(
+        default=None,
+        gt=0,
+        description="Gradient clipping norm for backbone parameters (if None, uses max_grad_norm)",
+    )
+    head_max_grad_norm: float | None = Field(
+        default=None,
+        gt=0,
+        description="Gradient clipping norm for head parameters (if None, uses max_grad_norm)",
     )
     bf16: bool = Field(default=False, description="Use bfloat16 mixed precision")
     fp16: bool = Field(default=False, description="Use float16 mixed precision")

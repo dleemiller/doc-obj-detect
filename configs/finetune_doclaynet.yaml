@@ -1,24 +1,22 @@
 # Fine-tuning configuration for DocLayNet dataset
+# Use --load flag to load pretrained PubLayNet model:
+#   uv run train --config configs/finetune_doclaynet.yaml --load outputs/pretrain_publaynet/final_model_ema
 
 model:
-  backbone: "timm/vit_pe_spatial_base_patch16_512.fb"
-  num_classes: 11  # DocLayNet classes
-  freeze_backbone: true  # Freeze backbone during fine-tuning
-  use_pretrained_backbone: true
-  pretrained_checkpoint: "outputs/pretrain_publaynet_dfine/checkpoints/best_model.pth"
+  backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3
+  architecture: dfine_xlarge  # D-FINE XLarge architecture
+  num_classes: 11  # DocLayNet classes (caption, footnote, formula, list-item, page-footer, page-header, picture, section-header, table, text, title)
+  use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 pretrained weights
+  freeze_backbone: false  # Fine-tune end-to-end (DocLayNet has different layout patterns than PubLayNet)
+  freeze_backbone_epochs: 0  # No freezing for fine-tuning
 
-detr:
-  # Deformable DETR architecture parameters (same as pretraining)
-  num_queries: 300
-  encoder_layers: 6
-  decoder_layers: 6
-  encoder_attention_heads: 8
-  decoder_attention_heads: 8
-  encoder_ffn_dim: 1024
-  decoder_ffn_dim: 1024
-  num_feature_levels: 4
-  decoder_n_points: 4
-  encoder_n_points: 4
+dfine:
+  # Backbone-specific configuration (ConvNeXt-Large)
+  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-Large channel dimensions
+  feat_strides: [8, 16, 32]
+  num_feature_levels: 3
+  backbone_kwargs:
+    out_indices: [1, 2, 3]
 
 data:
   dataset: "doclaynet"
@@ -57,13 +55,33 @@ augmentation:
     std_max: 0.01
 
 training:
-  # TrainingArguments parameters - passed as **kwargs
-  num_train_epochs: 20  # Fewer epochs for fine-tuning
+  # Fine-tuning schedule
+  num_train_epochs: 20
   learning_rate: 5.0e-5  # Lower LR for fine-tuning
+  backbone_lr_multiplier: 0.1  # Backbone LR = 10% of head LR (higher than pretraining since we're fine-tuning)
   weight_decay: 1.0e-4
-  warmup_steps: 500
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine_with_min_lr"
+  lr_scheduler_kwargs:
+    min_lr: 5.0e-6  # Min LR = base_lr / 10
+
+  # Gradient settings
   gradient_accumulation_steps: 1
+  max_grad_norm: 0.1
+  backbone_max_grad_norm: 0.1
+  head_max_grad_norm: 0.1
+
+  # Mixed precision
   bf16: true
+
+  # EMA for better evaluation
+  ema:
+    enabled: true
+    decay: 0.9999
+    warmup_steps: 500
+    use_for_eval: true
+
+  # Checkpointing and evaluation
   save_steps: 500
   eval_steps: 500
   logging_steps: 50
@@ -71,8 +89,8 @@ training:
   save_strategy: "steps"
   save_total_limit: 3
   load_best_model_at_end: true
-  metric_for_best_model: "eval_loss"
-  greater_is_better: false
+  metric_for_best_model: "map"
+  greater_is_better: true
   push_to_hub: false
 
 output:
