@@ -33,12 +33,30 @@ class TrainerRunner(BaseRunner):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def run(self, resume_from_checkpoint: str | Path | None = None) -> None:
+    def run(
+        self,
+        resume_from_checkpoint: str | Path | None = None,
+        load_weights_from: str | Path | None = None,
+        prefer_ema: bool = True,
+    ) -> None:
+        """Run training with one of three modes:
+
+        1. Fresh start (default): Build model from config
+        2. Resume training (--resume): Load full state (model, optimizer, scheduler, step)
+        3. Load weights (--load): Load model weights only, fresh optimizer/scheduler
+
+        Args:
+            resume_from_checkpoint: Checkpoint to resume from (full state)
+            load_weights_from: Checkpoint to load weights from (weights only)
+            prefer_ema: When loading weights, prefer EMA weights if available (default: True)
+        """
         logger.info("=" * 80)
         logger.info("Training Configuration")
         logger.info("=" * 80)
 
-        model, processors = self._build_model_and_processors()
+        model, processors = self._build_model_and_processors(
+            load_weights_from=load_weights_from, prefer_ema=prefer_ema
+        )
         train_dataset, val_dataset, class_labels = self._build_datasets(processors)
         training_args, callbacks, run_paths = self._build_training_args(model)
 
@@ -53,29 +71,84 @@ class TrainerRunner(BaseRunner):
             processing_class=processors.train,
             callbacks=callbacks,
             compute_metrics=compute_metrics_fn,
+            backbone_lr_multiplier=self.backbone_lr_multiplier,
+            backbone_max_grad_norm=self.backbone_max_grad_norm,
+            head_max_grad_norm=self.head_max_grad_norm,
         )
 
         logger.info("=" * 80)
         logger.info("Starting training...")
         if resume_from_checkpoint:
+            logger.info("Mode: Resume training (full state)")
             logger.info("Resuming from checkpoint: %s", resume_from_checkpoint)
+        elif load_weights_from:
+            logger.info("Mode: Load weights only (fresh optimizer/scheduler)")
+            logger.info("Loaded weights from: %s", load_weights_from)
+        else:
+            logger.info("Mode: Fresh start from config")
         logger.info("=" * 80)
 
         trainer.train(
             resume_from_checkpoint=str(resume_from_checkpoint) if resume_from_checkpoint else None
         )
 
+        # Save final model (training weights)
         final_model_path = run_paths.final_model_dir
         logger.info("Saving final model to %s", final_model_path)
         final_model_path.parent.mkdir(parents=True, exist_ok=True)
         trainer.save_model(str(final_model_path))
         processors.eval.save_pretrained(str(final_model_path))
+
+        # Save EMA model if enabled (for better phase transitions and deployment)
+        if self.config.training.ema.enabled:
+            ema_callback = None
+            for callback in callbacks:
+                if isinstance(callback, EMACallback):
+                    ema_callback = callback
+                    break
+
+            if ema_callback is not None and ema_callback.ema is not None:
+                ema_model_path = run_paths.output_dir / "final_model_ema"
+                logger.info("Saving EMA model to %s", ema_model_path)
+                ema_model_path.mkdir(parents=True, exist_ok=True)
+
+                # Temporarily swap to save EMA weights in HuggingFace format
+                original_model = trainer.model
+                trainer.model = ema_callback.ema.module
+                trainer.save_model(str(ema_model_path))
+                processors.eval.save_pretrained(str(ema_model_path))
+                trainer.model = original_model
+
+                logger.info(
+                    "EMA model saved successfully. Use this for next phase or deployment:\n"
+                    "  %s/pytorch_model.bin",
+                    ema_model_path,
+                )
+            else:
+                logger.warning(
+                    "EMA enabled in config but EMA callback not found or not initialized. "
+                    "Only training weights saved."
+                )
+
         logger.info("Training complete.")
 
     # ------------------------------------------------------------------
     # Builders
     # ------------------------------------------------------------------
-    def _build_model_and_processors(self) -> tuple[torch.nn.Module, ProcessorBundle]:
+    def _build_model_and_processors(
+        self,
+        load_weights_from: str | Path | None = None,
+        prefer_ema: bool = True,
+    ) -> tuple[torch.nn.Module, ProcessorBundle]:
+        """Build model and processors.
+
+        Args:
+            load_weights_from: Optional checkpoint to load weights from (--load flag)
+            prefer_ema: When loading weights, prefer EMA weights if available (default: True)
+
+        Returns:
+            Model and processor bundle
+        """
         model_cfg = self.config.model
         dfine_cfg = self.config.dfine.model_dump()
         image_size = self.config.data.image_size
@@ -95,17 +168,15 @@ class TrainerRunner(BaseRunner):
         model = artifacts.model
         processor = artifacts.processor
 
+        # Load weights if --load flag provided
+        if load_weights_from:
+            ModelFactory.load_from_checkpoint(model, load_weights_from, prefer_ema=prefer_ema)
+
         param_info = get_trainable_parameters(model)
         logger.info("Total parameters: %s", f"{param_info['total']:,}")
         logger.info("Trainable parameters: %s", f"{param_info['trainable']:,}")
         logger.info("Frozen parameters: %s", f"{param_info['frozen']:,}")
         logger.info("Trainable: %.2f%%", param_info["trainable_percent"])
-
-        if model_cfg.pretrained_checkpoint:
-            checkpoint_path = model_cfg.pretrained_checkpoint
-            logger.info("Loading pretrained checkpoint: %s", checkpoint_path)
-            checkpoint = torch.load(checkpoint_path, map_location="cpu")
-            model.load_state_dict(checkpoint, strict=False)
 
         processors = self._prepare_processors(processor)
         return model, processors
@@ -121,10 +192,15 @@ class TrainerRunner(BaseRunner):
     def _build_training_args(self, model) -> tuple[TrainingArguments, list, RunPaths]:
         paths = self._prepare_run_paths()
         training_config_dict = self.config.training.model_dump()
+
+        # Remove custom parameters that aren't standard TrainingArguments
         early_stopping_patience = training_config_dict.pop("early_stopping_patience", None)
-        _ = training_config_dict.pop(
-            "ema", None
-        )  # Remove EMA config (not a TrainingArguments param)
+        _ = training_config_dict.pop("ema", None)  # EMA config
+        self.backbone_lr_multiplier = training_config_dict.pop(
+            "backbone_lr_multiplier", 0.01
+        )  # Backbone LR multiplier
+        self.backbone_max_grad_norm = training_config_dict.pop("backbone_max_grad_norm", None)
+        self.head_max_grad_norm = training_config_dict.pop("head_max_grad_norm", None)
 
         training_args = TrainingArguments(
             output_dir=str(paths.output_dir),

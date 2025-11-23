@@ -1,0 +1,57 @@
+# D-FINE Small Architecture Configuration
+# Verified from: https://huggingface.co/ustc-community/dfine-small-coco/raw/main/config.json
+# Reference: https://github.com/Peterande/D-FINE
+
+# Decoder input channels (standardized across all feature levels)
+decoder_in_channels: [256, 256, 256]
+
+# Encoder configuration
+encoder_hidden_dim: 256
+encoder_layers: 1
+encoder_ffn_dim: 1024
+encoder_attention_heads: 8
+encoder_activation_function: "gelu"
+
+# Decoder configuration
+d_model: 256
+num_queries: 300
+decoder_layers: 3  # Small uses 3 layers (vs 4 for Medium, 6 for Large/XLarge)
+decoder_ffn_dim: 1024
+decoder_attention_heads: 8
+decoder_n_points: [3, 6, 3]  # Sampling points per level: [S:stride8, M:stride16, L:stride32]
+decoder_activation_function: "relu"
+
+# Distribution refinement parameters
+max_num_bins: 32  # reg_max
+reg_scale: 4.0
+
+# Additional D-FINE parameters
+decoder_offset_scale: 0.5
+depth_mult: 0.34  # Small scaling factor (vs 0.67 for Medium, 1.0 for Large/XLarge)
+hidden_expansion: 0.5  # Small uses 0.5 (vs 1.0 for others)
+focal_loss_alpha: 0.75
+focal_loss_gamma: 2.0
+use_focal_loss: true
+with_box_refine: true
+encode_proj_layers: [2]
+layer_scale: 1
+
+# Loss weights (D-FINE standard)
+weight_loss_vfl: 1.0      # Varifocal loss
+weight_loss_bbox: 5.0     # L1 bbox loss
+weight_loss_giou: 2.0     # GIoU loss
+weight_loss_fgl: 0.15     # Fine-grained localization (using standard value)
+weight_loss_ddf: 1.5      # Distribution distillation (using standard value)
+
+# Hungarian matcher costs
+matcher_class_cost: 2.0
+matcher_bbox_cost: 5.0
+matcher_giou_cost: 2.0
+matcher_alpha: 0.25
+matcher_gamma: 2.0
+
+# Training features
+num_denoising: 100
+label_noise_ratio: 0.5
+box_noise_scale: 1.0
+auxiliary_loss: true

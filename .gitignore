@@ -61,3 +61,8 @@ events.out.tfevents.*
 # Misc
 .DS_Store
 *.log
+
+# Temporary analysis files
+bbox_stats.npz
+extract_ema_weights.py
+test_scaled_config.py

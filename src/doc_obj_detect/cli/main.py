@@ -52,7 +52,21 @@ def _add_train_parser(subparsers):
     parser = subparsers.add_parser("train", help="Run D-FINE training")
     parser.add_argument("--config", required=True, help="Path to training YAML config")
     parser.add_argument(
-        "--resume-from-checkpoint", type=str, default=None, help="Checkpoint path to resume from"
+        "--resume-from-checkpoint",
+        type=str,
+        default=None,
+        help="Resume training from checkpoint (loads full state: model, optimizer, scheduler, step)",
+    )
+    parser.add_argument(
+        "--load",
+        type=str,
+        default=None,
+        help="Load model weights only from checkpoint (starts new training with fresh optimizer/scheduler)",
+    )
+    parser.add_argument(
+        "--no-ema",
+        action="store_true",
+        help="When using --load, load regular weights instead of EMA weights (if available)",
     )
     parser.set_defaults(handler=_handle_train)
 
@@ -157,8 +171,19 @@ def _add_cleanup_parser(subparsers):
 
 
 def _handle_train(args):
+    # Validate mutually exclusive flags
+    if args.resume_from_checkpoint and args.load:
+        raise ValueError(
+            "Cannot specify both --resume-from-checkpoint and --load. "
+            "Use --resume to continue training with full state, or --load to start fresh with model weights."
+        )
+
     runner = TrainerRunner.from_config(args.config)
-    runner.run(resume_from_checkpoint=args.resume_from_checkpoint)
+    runner.run(
+        resume_from_checkpoint=args.resume_from_checkpoint,
+        load_weights_from=args.load,
+        prefer_ema=not args.no_ema,
+    )
 
 
 def _handle_evaluate(args):

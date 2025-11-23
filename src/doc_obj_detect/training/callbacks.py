@@ -242,12 +242,44 @@ class EMACallback(TrainerCallback):
             device=device,
         )
 
-        logger.info(
-            "[EMA] Callback initialized (decay=%.4f, warmup=%d, use_for_eval=%s)",
-            self.decay,
-            self.warmup_steps,
-            self.use_ema_for_eval,
-        )
+        # Restore EMA state if resuming from checkpoint
+        from pathlib import Path
+
+        ema_state_loaded = False
+        if args.output_dir:
+            output_path = Path(args.output_dir)
+
+            # Try to find the most recent checkpoint with EMA state
+            checkpoint_dirs = sorted(output_path.glob("checkpoint-*"))
+            if checkpoint_dirs:
+                # Start from the most recent checkpoint
+                for checkpoint_dir in reversed(checkpoint_dirs):
+                    ema_path = checkpoint_dir / "ema_state.pt"
+                    if ema_path.exists():
+                        try:
+                            import torch
+
+                            ema_state_dict = torch.load(ema_path, map_location=device)
+                            self.ema.load_state_dict(ema_state_dict)
+                            logger.info(
+                                "[EMA] Restored EMA state from checkpoint: %s (updates=%d)",
+                                ema_path,
+                                self.ema.updates,
+                            )
+                            ema_state_loaded = True
+                            break
+                        except Exception as e:
+                            logger.warning(
+                                "[EMA] Failed to load EMA state from %s: %s", ema_path, e
+                            )
+
+        if not ema_state_loaded:
+            logger.info(
+                "[EMA] Callback initialized from scratch (decay=%.4f, warmup=%d, use_for_eval=%s)",
+                self.decay,
+                self.warmup_steps,
+                self.use_ema_for_eval,
+            )
         return control
 
     def on_step_end(self, args, state, control, model=None, **kwargs):  # type: ignore[override]
