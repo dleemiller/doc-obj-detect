@@ -2,6 +2,7 @@
 """
 Visualize all augmentations used in the project.
 Creates a grid showing original image + each augmentation type.
+Uses real PubLayNet documents for realistic visualization.
 """
 
 from pathlib import Path
@@ -10,53 +11,124 @@ import albumentations as A
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image, ImageDraw
+from datasets import load_dataset
+from PIL import Image
+
+# Import our data loader
+from doc_obj_detect.data.constants import PUBLAYNET_CLASSES
 
 
-def create_sample_document(width=640, height=800):
-    """Create a synthetic document-like image with bboxes for visualization."""
-    # Create white background
-    img = Image.new("RGB", (width, height), color="white")
-    draw = ImageDraw.Draw(img)
+def load_publaynet_samples(num_samples=5):
+    """Load real PubLayNet samples using our project's data loader."""
+    print(f"Loading {num_samples} real PubLayNet samples...")
 
-    # Draw document-like content
-    # Title
-    draw.rectangle([50, 50, 590, 100], fill="lightblue", outline="blue", width=2)
+    try:
+        # Use our project's PubLayNet dataset
+        dataset = load_dataset("shunk031/PubLayNet", split="train", streaming=True)
+        print("✓ Connected to PubLayNet dataset")
 
-    # Two-column text blocks
-    draw.rectangle([50, 120, 290, 350], fill="lightgray", outline="black", width=1)
-    draw.rectangle([310, 120, 590, 350], fill="lightgray", outline="black", width=1)
+        # Load samples
+        samples = []
+        dataset_iter = iter(dataset)
 
-    # Table
-    draw.rectangle([50, 380, 590, 550], fill="lightyellow", outline="orange", width=2)
-    for i in range(4):
-        y = 380 + i * 42
-        draw.line([50, y, 590, y], fill="orange", width=1)
-    for i in range(4):
-        x = 50 + i * 180
-        draw.line([x, 380, x, 550], fill="orange", width=1)
+        for i in range(num_samples * 3):  # Try more samples to ensure we get enough good ones
+            try:
+                sample = next(dataset_iter)
 
-    # Figure
-    draw.rectangle([50, 580, 290, 730], fill="lightgreen", outline="green", width=2)
-    draw.text((100, 650), "Figure", fill="green")
+                # Extract image
+                image = sample["image"]
+                if isinstance(image, Image.Image):
+                    image = np.array(image.convert("RGB"))
 
-    # Caption
-    draw.rectangle([310, 680, 590, 730], fill="pink", outline="red", width=1)
+                # Extract annotations
+                annotations = sample["annotations"]
+                bboxes = []
 
-    # Convert to numpy
-    img_array = np.array(img)
+                if annotations and "bbox" in annotations:
+                    # PubLayNet format: annotations contains bbox list and category_id list
+                    bbox_list = annotations["bbox"]
+                    category_list = annotations["category_id"]
 
-    # Bboxes in [x_min, y_min, x_max, y_max] format
-    bboxes = [
-        [50, 50, 590, 100, "title"],  # Title
-        [50, 120, 290, 350, "text"],  # Left column
-        [310, 120, 590, 350, "text"],  # Right column
-        [50, 380, 590, 550, "table"],  # Table
-        [50, 580, 290, 730, "figure"],  # Figure
-        [310, 680, 590, 730, "caption"],  # Caption
-    ]
+                    for bbox, category_id in zip(bbox_list, category_list):
+                        # COCO format: [x_min, y_min, width, height]
+                        x_min, y_min, w, h = bbox
+                        x_max = x_min + w
+                        y_max = y_min + h
 
-    return img_array, bboxes
+                        # Get label name
+                        label = PUBLAYNET_CLASSES.get(category_id, "unknown")
+                        bboxes.append([x_min, y_min, x_max, y_max, label])
+
+                # Only add samples with at least 3 annotations for good visualization
+                if len(bboxes) >= 3:
+                    samples.append((image, bboxes))
+                    print(f"  Loaded sample {len(samples)}/{num_samples} with {len(bboxes)} annotations, size: {image.shape}")
+
+                if len(samples) >= num_samples:
+                    break
+
+            except Exception as e:
+                print(f"  Warning: Skipping sample {i}: {e}")
+                continue
+
+        if len(samples) == 0:
+            raise ValueError("No valid samples loaded")
+
+        print(f"✓ Successfully loaded {len(samples)} real PubLayNet samples")
+        return samples
+
+    except Exception as e:
+        print(f"Error loading PubLayNet: {e}")
+        print("Using synthetic document samples as fallback...")
+        return create_synthetic_samples(num_samples)
+
+
+def create_synthetic_samples(num_samples=5):
+    """Create synthetic document-like images as fallback."""
+    from PIL import ImageDraw
+
+    samples = []
+    for i in range(num_samples):
+        # Vary dimensions slightly
+        width = 640 + (i * 50)
+        height = 800 + (i * 60)
+
+        img = Image.new("RGB", (width, height), color="white")
+        draw = ImageDraw.Draw(img)
+
+        # Draw document elements with varying layouts
+        # Title
+        draw.rectangle([50, 50, width-50, 100], fill="lightblue", outline="blue", width=2)
+
+        # Text blocks (vary positions)
+        if i % 2 == 0:  # Two column
+            draw.rectangle([50, 120, width//2-20, 350], fill="lightgray", outline="black", width=1)
+            draw.rectangle([width//2+20, 120, width-50, 350], fill="lightgray", outline="black", width=1)
+        else:  # Single column
+            draw.rectangle([50, 120, width-50, 350], fill="lightgray", outline="black", width=1)
+
+        # Table
+        draw.rectangle([50, 380, width-50, 550], fill="lightyellow", outline="orange", width=2)
+
+        # Figure
+        draw.rectangle([50, 580, width//2, height-70], fill="lightgreen", outline="green", width=2)
+
+        img_array = np.array(img)
+
+        bboxes = [
+            [50, 50, width-50, 100, "title"],
+            [50, 120, width//2-20 if i%2==0 else width-50, 350, "text"],
+            [50, 380, width-50, 550, "table"],
+            [50, 580, width//2, height-70, "figure"],
+        ]
+
+        if i % 2 == 0:  # Add second text column
+            bboxes.append([width//2+20, 120, width-50, 350, "text"])
+
+        samples.append((img_array, bboxes))
+
+    print(f"✓ Created {num_samples} synthetic samples")
+    return samples
 
 
 def visualize_with_boxes(ax, image, bboxes, title):
@@ -65,30 +137,50 @@ def visualize_with_boxes(ax, image, bboxes, title):
     ax.set_title(title, fontsize=10, fontweight="bold")
     ax.axis("off")
 
-    # Color map for classes
+    # Color map for classes (PubLayNet)
     colors = {
+        "text": "cyan",
         "title": "blue",
-        "text": "gray",
+        "list": "magenta",
         "table": "orange",
         "figure": "green",
         "caption": "red",
+        "unknown": "gray",
     }
 
     for bbox in bboxes:
         x_min, y_min, x_max, y_max, label = bbox
         width = x_max - x_min
         height = y_max - y_min
+
+        # Draw thicker, more visible bounding box
         rect = patches.Rectangle(
             (x_min, y_min),
             width,
             height,
-            linewidth=2,
+            linewidth=3,  # Increased from 2
             edgecolor=colors.get(label, "black"),
             facecolor="none",
-            linestyle="--",
-            alpha=0.8,
+            linestyle="-",  # Solid line instead of dashed for better visibility
+            alpha=1.0,  # Full opacity
         )
         ax.add_patch(rect)
+
+        # Add label text at top-left corner of bbox
+        ax.text(
+            x_min + 5,
+            y_min + 15,
+            label,
+            fontsize=8,
+            color="white",
+            weight="bold",
+            bbox=dict(
+                facecolor=colors.get(label, "black"),
+                alpha=0.7,
+                edgecolor="none",
+                pad=2,
+            ),
+        )
 
 
 def apply_augmentation(image, bboxes, transform, name):
@@ -111,13 +203,62 @@ def apply_augmentation(image, bboxes, transform, name):
         return image, bboxes
 
 
+def create_mosaic_visualization(images_list, bboxes_list, target_size=640):
+    """Create a mosaic visualization from multiple images."""
+    # Use albumentations Mosaic with proper metadata
+    transform = A.Compose(
+        [A.Mosaic(height=target_size, width=target_size, p=1.0)],
+        bbox_params=A.BboxParams(format="pascal_voc", label_fields=["class_labels"]),
+    )
+
+    # Prepare the primary image
+    bbox_list = [[b[0], b[1], b[2], b[3]] for b in bboxes_list[0]]
+    labels = [b[4] for b in bboxes_list[0]]
+
+    try:
+        # Apply mosaic - albumentations will pull from metadata
+        transformed = transform(image=images_list[0], bboxes=bbox_list, class_labels=labels)
+
+        # Reconstruct bboxes
+        new_bboxes = []
+        for bbox, label in zip(transformed["bboxes"], transformed["class_labels"], strict=False):
+            new_bboxes.append([bbox[0], bbox[1], bbox[2], bbox[3], label])
+
+        return transformed["image"], new_bboxes
+    except Exception as e:
+        print(f"Warning: Mosaic failed - {e}")
+        return images_list[0], bboxes_list[0]
+
+
+def create_mixup_visualization(img1, bboxes1, img2, bboxes2, alpha=0.5):
+    """Create a mixup visualization from two images."""
+    # Resize images to same size
+    h, w = img1.shape[:2]
+    if img2.shape[:2] != (h, w):
+        from PIL import Image
+        img2_pil = Image.fromarray(img2)
+        img2_pil = img2_pil.resize((w, h))
+        img2 = np.array(img2_pil)
+
+    # Mix images
+    mixed_image = (alpha * img1 + (1 - alpha) * img2).astype(np.uint8)
+
+    # Combine bboxes from both images
+    combined_bboxes = bboxes1 + bboxes2
+
+    return mixed_image, combined_bboxes
+
+
 def main():
     # Create output directory
     output_dir = Path("outputs/augmentation_visualizations")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create sample document
-    image, bboxes = create_sample_document()
+    # Load multiple samples for mosaic/mixup
+    samples = load_publaynet_samples(num_samples=5)
+
+    # Use first sample as primary
+    image, bboxes = samples[0]
 
     # Define augmentations to visualize
     augmentations = {
@@ -190,7 +331,8 @@ def main():
     print(f"✓ Saved comprehensive visualization to {output_path}")
 
     # Create individual augmentation comparison (original vs augmented)
-    fig, axes = plt.subplots(4, 4, figsize=(16, 16))
+    # Now with 9 augmentations (7 regular + mosaic + mixup) = 18 slots (9 rows x 2 cols)
+    fig, axes = plt.subplots(5, 4, figsize=(16, 20))
     axes = axes.flatten()
 
     comparison_augs = [
@@ -200,7 +342,6 @@ def main():
         "Rotation (±5°, p=0.5)",
         "Brightness/Contrast (p=0.5)",
         "Blur (p=0.3)",
-        "JPEG Compression (p=0.3)",
         "Gaussian Noise (p=0.3)",
     ]
 
@@ -215,6 +356,31 @@ def main():
         aug_image, aug_bboxes = apply_augmentation(image.copy(), bboxes, transform, aug_name)
         visualize_with_boxes(axes[idx], aug_image, aug_bboxes, aug_name)
         idx += 1
+
+    # Add Mosaic visualization
+    visualize_with_boxes(axes[idx], image, bboxes, "Original")
+    idx += 1
+    mosaic_img, mosaic_bboxes = create_mosaic_visualization(
+        [s[0] for s in samples[:4]],
+        [s[1] for s in samples[:4]]
+    )
+    visualize_with_boxes(axes[idx], mosaic_img, mosaic_bboxes, "Mosaic (p=0.5)")
+    idx += 1
+
+    # Add MixUp visualization
+    visualize_with_boxes(axes[idx], image, bboxes, "Original")
+    idx += 1
+    mixup_img, mixup_bboxes = create_mixup_visualization(
+        samples[0][0], samples[0][1],
+        samples[1][0], samples[1][1],
+        alpha=0.5
+    )
+    visualize_with_boxes(axes[idx], mixup_img, mixup_bboxes, "MixUp (p=0.15, alpha=0.2)")
+    idx += 1
+
+    # Hide unused axes
+    for i in range(idx, len(axes)):
+        axes[i].axis("off")
 
     plt.tight_layout()
     output_path = output_dir / "augmentation_comparisons.png"
