@@ -14,6 +14,7 @@ from doc_obj_detect.tools import (
     plot_bbox_histograms,
     save_bbox_data,
 )
+from doc_obj_detect.tools.analyze_multiscale import run_multiscale_analysis
 from doc_obj_detect.training import DistillRunner, EvaluatorRunner, TrainerRunner
 from doc_obj_detect.visualize import visualize_augmentations
 
@@ -37,6 +38,7 @@ def main(argv: list[str] | None = None) -> None:
     _add_visualize_parser(subparsers)
     _add_dataset_info_parser(subparsers)
     _add_bbox_hist_parser(subparsers)
+    _add_analyze_multiscale_parser(subparsers)
     _add_cleanup_parser(subparsers)
 
     args = parser.parse_args(argv)
@@ -263,6 +265,59 @@ def _handle_bbox_hist(args):
         output_path=args.output,
     )
     logger.info("Saved bbox histograms to %s", args.output)
+
+
+def _add_analyze_multiscale_parser(subparsers):
+    p = subparsers.add_parser(
+        "analyze-multiscale",
+        help="Analyze bbox statistics across multiple scaling policies (offline)",
+    )
+    p.add_argument("--config", type=str, required=True, help="Training config YAML")
+    p.add_argument(
+        "--split",
+        type=str,
+        default="validation",
+        help="Dataset split to analyze (default: validation)",
+    )
+    p.add_argument(
+        "--max-samples",
+        type=int,
+        default=5000,
+        help="Maximum samples to process (default: 5000)",
+    )
+    p.add_argument(
+        "--output-dir",
+        type=str,
+        default="outputs/multiscale_analysis",
+        help="Output directory (default: outputs/multiscale_analysis)",
+    )
+    p.set_defaults(handler=_handle_analyze_multiscale)
+
+
+def _handle_analyze_multiscale(args):
+    from pathlib import Path
+
+    from doc_obj_detect.config import load_train_config
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    config = load_train_config(args.config)
+    output_dir = Path(args.output_dir)
+
+    logger.info("Starting multiscale analysis")
+    logger.info("Config: %s", args.config)
+    logger.info("Split: %s", args.split)
+    logger.info("Max samples: %s", args.max_samples)
+    logger.info("Output dir: %s", output_dir)
+
+    run_multiscale_analysis(
+        config=config,
+        output_dir=output_dir,
+        split=args.split,
+        max_samples=args.max_samples,
+    )
 
 
 def _handle_cleanup(args):

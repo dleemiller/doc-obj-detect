@@ -39,12 +39,15 @@ env/
 htmlcov/
 .tox/
 
-# Data
-data/
-*.hdf5
-*.h5
-*.pkl
-*.pickle
+# Data - allow data/ directory but ignore large dataset files
+data/**/*.hdf5
+data/**/*.h5
+data/**/*.pkl
+data/**/*.pickle
+data/**/images/
+data/**/annotations/
+data/**/*.parquet
+data/**/*.arrow
 
 # Model outputs
 outputs/

@@ -1,0 +1,131 @@
+# D-FINE Pretraining configuration for PubLayNet dataset
+# Square 640x640 resolution following ICDAR 2023 competition strategies
+# ConvNeXt-Large DINOv3 backbone + D-FINE detector head (3 stride levels)
+
+model:
+  backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (~200M params)
+  architecture: dfine_xlarge  # D-FINE XLarge architecture
+  num_classes: 5  # PubLayNet: text, title, list, table, figure
+  use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 weights
+  freeze_backbone: true  # Let the decoder stabilize against frozen ConvNeXt features
+  freeze_backbone_epochs: 2  # Unfreeze after 2 epochs
+
+dfine:
+  encoder_in_channels: [384, 768, 1536]  # ConvNeXt-Large channel dimensions
+  feat_strides: [8, 16, 32]  # Feature pyramid strides
+  num_feature_levels: 3  # 3 levels for standard D-FINE configuration
+  backbone_kwargs:
+    out_indices: [1, 2, 3]  # Extract from stages 1, 2, 3
+
+data:
+  dataset: "publaynet"
+  train_split: "train"
+  val_split: "validation"
+  image_size: 640  # Base square size
+  batch_size: 16
+  max_eval_samples: 1000
+  num_workers: 4
+
+augmentation:
+  # ICDAR 2023 competition strategy: square resizing with multi-scale
+  force_square_resize: true  # Force square 640x640 like ICDAR baseline
+  multi_scale_sizes: [576, 608, 640, 672, 704]  # Multi-scale training at square sizes
+
+  # Flip augmentations (essential for layout detection - ICDAR 2023 & DocLayout-YOLO)
+  horizontal_flip: 0.5  # Standard horizontal flip (matches papers)
+  vertical_flip: 0.5   # Increased to match DocLayout-YOLO (handles varied text orientations)
+
+  # Random cropping (DocLayout-YOLO: 0.7 probability, area 0.5-0.9)
+  random_crop:
+    probability: 0.7  # High probability for local feature learning
+    area_min: 0.5     # Minimum crop area as fraction of original
+    area_max: 0.9     # Maximum crop area
+
+  # Mosaic augmentation (used by ICDAR winners)
+  mosaic:
+    probability: 0.5  # 50% chance to apply mosaic (4-image grid)
+    disable_after_epoch: 10  # Disable after epoch 10 like 2nd place team
+
+  # Mix-up augmentation (used in ICDAR baseline)
+  mixup:
+    probability: 0.15  # 15% chance when not using mosaic
+    alpha: 0.2  # Beta distribution parameter for mixing coefficient
+
+  # Geometric augmentations
+  rotate_limit: 5  # ICDAR winners used 5°
+  rotate_prob: 0.5
+  perspective:
+    probability: 0.0  # Disabled for pretraining (conservative approach)
+    scale_min: 0.02
+    scale_max: 0.05
+  elastic:
+    probability: 0.0  # Disabled for pretraining (conservative approach)
+    alpha: 30
+    sigma: 5
+
+  # Photometric augmentations (aligned with DocLayout-YOLO)
+  brightness_contrast:
+    limit: 0.2
+    probability: 0.5  # Matches DocLayout-YOLO
+  blur:
+    probability: 0.3  # Increased for better robustness (simulates resolution issues)
+    blur_limit: 3
+  compression:
+    probability: 0.3  # Increased for JPEG artifact robustness
+    quality_min: 75
+    quality_max: 100
+  noise:
+    probability: 0.3  # Increased to match DocLayout-YOLO's Gaussian noise
+    std_min: 0.0
+    std_max: 0.01
+
+training:
+  num_train_epochs: 12
+
+  # Learning rates
+  learning_rate: 1.25e-4
+  backbone_lr_multiplier: 0.01
+
+  # Optimizer settings
+  optim: "adamw_torch_fused"
+  weight_decay: 1.25e-4
+
+  # Warmup and scheduling
+  lr_scheduler_type: "cosine_with_min_lr"
+  warmup_ratio: 0.08
+  lr_scheduler_kwargs:
+    min_lr: 1.25e-5
+
+  # Gradient settings
+  gradient_accumulation_steps: 1
+  max_grad_norm: 0.1
+  backbone_max_grad_norm: 0.1
+  head_max_grad_norm: 0.1
+
+  # Mixed precision
+  bf16: true
+
+  # Exponential Moving Average
+  ema:
+    enabled: true
+    decay: 0.9999
+    warmup_steps: 1000
+    use_for_eval: true
+
+  # Checkpointing and evaluation
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 5
+  eval_strategy: "steps"
+  save_strategy: "steps"
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "map"
+  greater_is_better: true
+  push_to_hub: false
+
+output:
+  output_dir: "outputs/pretrain_publaynet_square640"
+  checkpoint_dir: "outputs/pretrain_publaynet_square640/checkpoints"
+  log_dir: "outputs/pretrain_publaynet_square640/logs"
+  run_name: "square640_mosaic_mixup_flips"
