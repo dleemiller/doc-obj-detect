@@ -18,7 +18,7 @@ num_queries: 300
 decoder_layers: 6
 decoder_ffn_dim: 1024
 decoder_attention_heads: 8
-decoder_n_points: [3, 6, 3]  # Sampling points per level: [S:stride8, M:stride16, L:stride32]
+decoder_n_points: [6, 6, 3]  # Sampling points per level: [S:stride8, M:stride16, L:stride32]
 decoder_activation_function: "silu"
 
 # Distribution refinement parameters

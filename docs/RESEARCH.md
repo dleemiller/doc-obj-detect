@@ -713,69 +713,224 @@ Solution: **Batch-level random scaling**
 
 ### 6.4 Data Augmentation Strategy
 
+**Research foundation:**
+Our augmentation strategy is informed by three key sources:
+1. **ICDAR 2023 DocLayNet Competition** winners (0.64-0.70 mAP)
+2. **DocLayout-YOLO** (79.7% mAP on DocLayNet)
+3. **ICDAR 2023 Baseline** (YOLOv5 at 0.49 mAP)
+
 **Document-specific considerations:**
-* Cannot use random crops (destroys page context)
-* Cannot use strong color shifts (breaks foreground/background)
-* Must preserve text readability
+* Text readability must be preserved
+* Layout structure and geometry are critical
+* Augmentations should simulate real scanning/camera variations
+* Avoid occlusion-based augmentations that cover large content areas
 
-**Geometric augmentations:**
+#### 6.4.1 Batch-Level Augmentations
 
-1. **Perspective transform** (p=0.3)
+**1. Mosaic Augmentation** (ICDAR 2023 winners, YOLO-style)
    ```python
-   albumentations.Perspective(scale=(0.02, 0.05), p=0.3)
+   # Using official albumentations.Mosaic for reliability
+   albumentations.Mosaic(height=640, width=640, p=0.5)
    ```
-   * Simulates scanning angle, camera distortion
-   * Small scale to avoid destroying text
+   * **Purpose:** Combines 4 images into 2×2 grid with random center point
+   * **Benefits:**
+     - Helps model learn diverse layouts simultaneously
+     - Improves small object detection (exposes more small objects per batch)
+     - Increases effective dataset diversity
+   * **Configuration (PubLayNet pretrain):** p=0.5, disable after epoch 10
+   * **Configuration (DocLayNet finetune):** p=0.3, disable after epoch 5
+   * **Key insight from ICDAR 2nd place:** Disabled mosaic for final 20 epochs to allow refinement on natural images
 
-2. **Elastic deformation** (p=0.2)
+**2. MixUp Augmentation** (ICDAR 2023 baseline)
    ```python
-   albumentations.ElasticTransform(alpha=30, sigma=5, p=0.2)
+   # Custom implementation using Beta distribution
+   alpha = 0.2
+   lambda_ = np.random.beta(alpha, alpha)
+   mixed_image = lambda_ * img1 + (1 - lambda_) * img2
    ```
-   * Simulates paper warping, book curvature
-   * Mild parameters to preserve layout structure
+   * **Purpose:** Blends two images and their labels
+   * **Benefits:**
+     - Regularization through implicit data augmentation
+     - Smoother decision boundaries
+     - Reduces overfitting on small datasets
+   * **Configuration:** p=0.15, alpha=0.2 (conservative blending)
+   * **Note:** Applied when mosaic is not used (mutually exclusive)
 
-3. **Rotation** (p=0.5, limit=5°)
+#### 6.4.2 Per-Image Geometric Augmentations
+
+**3. Horizontal & Vertical Flips** (DocLayout-YOLO)
+   ```python
+   albumentations.HorizontalFlip(p=0.5)
+   albumentations.VerticalFlip(p=0.5)
+   ```
+   * **Purpose:** Handles varied text orientations in documents
+   * **Benefits:**
+     - Essential for layout detection (used by all ICDAR winners)
+     - Documents can be scanned/photographed in any orientation
+     - Low computational cost, high value
+   * **Research backing:** DocLayout-YOLO uses 0.5 probability for both
+
+**4. Random Cropping** (DocLayout-YOLO: 0.7 probability, NEW)
+   ```python
+   albumentations.RandomResizedCrop(
+       height=640, width=640,
+       scale=(0.5, 0.9),  # Crop 50-90% of original area
+       p=0.7
+   )
+   ```
+   * **Purpose:** Emphasizes local feature learning and multi-scale exposure
+   * **Benefits:**
+     - Forces model to detect objects at varying scales
+     - Improves generalization to partial page views
+     - Simulates zoomed-in document captures
+   * **Research backing:** DocLayout-YOLO's highest-probability augmentation (0.7)
+   * **Area range:** 0.5-0.9 (50-90% of original, preserves context)
+
+**5. Rotation** (ICDAR 2023 winners: 5°)
    ```python
    albumentations.Rotate(limit=5, border_mode=cv2.BORDER_CONSTANT, p=0.5)
    ```
-   * Small angles only - documents are upright
-   * Simulates minor scanning misalignment
+   * **Purpose:** Simulates minor scanning misalignment
+   * **Benefits:**
+     - Small angles preserve text readability
+     - Simulates real-world scanning variations
+     - Improves model robustness to orientation
+   * **Research backing:** ICDAR winners explicitly used 5° rotation
+   * **Conservative limit:** Documents are typically upright (unlike natural images)
 
-**Photometric augmentations:**
-
-4. **Brightness/Contrast** (p=0.5)
+**6. Perspective Transform** (DocLayNet fine-tuning only)
    ```python
-   albumentations.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5)
+   albumentations.Perspective(scale=(0.02, 0.05), p=0.3)
    ```
-   * Simulates lighting variations, scan quality
+   * **Purpose:** Simulates scanning angle and camera distortion
+   * **Benefits:**
+     - Models real-world capture conditions
+     - Small scale preserves layout structure
+   * **Configuration:** Disabled (p=0.0) for pretraining, enabled (p=0.3) for fine-tuning
 
-5. **Blur** (p=0.3)
+**7. Elastic Deformation** (DocLayout-YOLO, fine-tuning only)
+   ```python
+   albumentations.ElasticTransform(alpha=30, sigma=5, p=0.2)
+   ```
+   * **Purpose:** Simulates paper warping, book curvature, jitter
+   * **Benefits:**
+     - Models real-world document distortions
+     - Mild parameters preserve readability
+   * **Research backing:** DocLayout-YOLO uses elastic transforms
+   * **Configuration:** Disabled (p=0.0) for pretraining, enabled (p=0.2) for fine-tuning
+
+#### 6.4.3 Photometric Augmentations
+
+**8. Brightness & Contrast** (DocLayout-YOLO: 0.5 probability)
+   ```python
+   albumentations.RandomBrightnessContrast(
+       brightness_limit=0.2, contrast_limit=0.2, p=0.5
+   )
+   ```
+   * **Purpose:** Simulates lighting variations and scan quality
+   * **Benefits:**
+     - Models real-world lighting conditions
+     - Improves robustness to document quality variations
+   * **Research backing:** DocLayout-YOLO explicitly uses 0.5 probability
+
+**9. Blur** (p=0.3, increased from baseline)
    ```python
    albumentations.OneOf([
        albumentations.MotionBlur(blur_limit=3),
        albumentations.GaussianBlur(blur_limit=3)
    ], p=0.3)
    ```
-   * Simulates camera/scanner focus issues
-   * Small blur limit to keep text readable
+   * **Purpose:** Simulates camera/scanner focus issues and resolution loss
+   * **Benefits:**
+     - Models real-world capture imperfections
+     - Small blur limit maintains text readability
+   * **Research backing:** DocLayout-YOLO uses blur for robustness
 
-6. **JPEG compression** (p=0.3)
+**10. JPEG Compression** (p=0.3, increased from baseline)
    ```python
    albumentations.ImageCompression(quality_lower=75, quality_upper=100, p=0.3)
    ```
-   * Simulates compressed scans, web images
+   * **Purpose:** Simulates compressed scans and web images
+   * **Benefits:**
+     - Models compression artifacts
+     - Improves robustness to varying image quality
 
-7. **Gaussian noise** (p=0.2)
+**11. Gaussian Noise** (DocLayout-YOLO, p=0.3)
    ```python
-   albumentations.GaussNoise(var_limit=(0.0, 0.01), p=0.2)
+   albumentations.GaussNoise(var_limit=(0.0, 0.01), p=0.3)
    ```
-   * Simulates sensor noise
+   * **Purpose:** Simulates sensor noise and low-light conditions
+   * **Benefits:**
+     - Models camera sensor imperfections
+     - Improves robustness to noisy inputs
+   * **Research backing:** DocLayout-YOLO uses Gaussian noise
 
-**Explicitly avoided:**
-* **Random crops:** Documents need full page context
-* **CutOut/MixUp:** Destroys layout structure
-* **RandomShadow:** Occludes text content
-* **Heavy color jitter:** Changes text/background contrast
+#### 6.4.4 Epoch-Based Augmentation Control
+
+**Progressive augmentation strategy** (from ICDAR 2nd place team):
+
+```python
+# In training loop
+augmentor.set_epoch(current_epoch)
+
+# Inside augmentor
+if self.current_epoch >= self.mosaic_disable_epoch:
+    # Disable mosaic, allow model to refine on natural images
+    use_mosaic = False
+```
+
+**Rationale:**
+* **Early training (epochs 1-10):** Heavy augmentation (mosaic) for diversity
+* **Late training (epochs 11+):** Natural images only for precision refinement
+* **ICDAR 2nd place insight:** Disabled mosaic for final 20/150 epochs (13%)
+* **Our implementation:** Disable after epoch 10/12 for pretraining (17%), epoch 5/20 for fine-tuning (25%)
+
+#### 6.4.5 Augmentations Explicitly Avoided
+
+**CutOut/Random Erasing:**
+* Destroys layout structure and reading flow
+* Unlike natural images, every document region carries semantic value
+* Occlusion would harm model's ability to learn layout patterns
+
+**RandomShadow:**
+* Covers large portions of content
+* Text must remain readable for meaningful detection
+* Too aggressive for document preservation requirements
+
+**Heavy Color Jitter:**
+* Changes text/background contrast ratios
+* Documents rely on clear foreground/background separation
+* Subtle brightness/contrast changes are sufficient
+
+**Aggressive Random Crops:**
+* Documents require page-level context (margins, columns, reading order)
+* Complete page structure informs local region classification
+* We use **constrained cropping** (0.5-0.9 area) instead of arbitrary crops
+
+#### 6.4.6 Summary: Augmentation Alignment with Published Research
+
+| Augmentation | Our Config | DocLayout-YOLO | ICDAR Winners | Rationale |
+|--------------|------------|----------------|---------------|-----------|
+| Horizontal Flip | 0.5 | 0.5 | ✓ Used | Standard practice |
+| Vertical Flip | 0.5 | 0.5 | ✓ Used | Handles varied orientations |
+| **Random Crop** | **0.7** | **0.7 (area 0.5-0.9)** | Not specified | **High-impact for local features** |
+| Rotation | 5° @ 0.5p | Not specified | **5° (explicit)** | **ICDAR winners' setting** |
+| **Mosaic** | **0.5p** | Not mentioned | **✓ Critical** | **Used by all top teams** |
+| Mosaic Disable | **Epoch 10/5** | N/A | **Final 20 epochs** | **2nd place strategy** |
+| MixUp | 0.15p | Not mentioned | ✓ Baseline | ICDAR baseline used it |
+| Brightness/Contrast | 0.5p | **0.5p** | Not specified | **DocLayout-YOLO match** |
+| Blur | 0.3p | ✓ Used | Not specified | Robustness to quality |
+| JPEG Compression | 0.3p | Not mentioned | Not specified | Real-world artifacts |
+| Gaussian Noise | 0.3p | ✓ Used | Not specified | Sensor noise simulation |
+| Perspective | 0.0-0.3p | Not mentioned | Not specified | Fine-tune only |
+| Elastic | 0.0-0.2p | ✓ Used | Not specified | Fine-tune only |
+
+**Key takeaways:**
+1. **Random cropping** is our most significant addition (0.7 probability from DocLayout-YOLO)
+2. **Mosaic + epoch-based disabling** follows ICDAR competition winners
+3. **Vertical flip** increased to 0.5 (from 0.1) to match DocLayout-YOLO
+4. **Photometric augmentations** increased to match published settings
+5. **Geometric augmentations** remain conservative for pretraining, more aggressive for fine-tuning
 
 ### 6.5 Class Label Mapping
 
@@ -853,14 +1008,56 @@ Solution: **Batch-level random scaling**
 * Final phase: "Precision tail" - small LR for fine-tuning
 * Min LR 1.25e-5 (10× lower than max) allows continued learning without degradation
 
+**Exponential Moving Average (EMA):**
+* Enabled: true
+* Decay: 0.9999 (D-FINE default)
+* Warmup steps: 1000
+* Use for evaluation: true
+
+**Why EMA for detection:**
+1. **Stabilizes evaluation metrics**
+   - Object detection loss landscapes are noisy (many local minima)
+   - EMA weights smooth out training fluctuations
+   - Provides more consistent mAP measurements across evaluations
+
+2. **Improves generalization**
+   - EMA weights generalize better than final checkpoint
+   - Typical improvement: +0.5 to +1.5 mAP over raw weights
+   - D-FINE paper shows consistent gains with EMA=0.9999
+
+3. **Better boundary precision**
+   - FDR distributions benefit from weight averaging
+   - Edge probability distributions become smoother
+   - Critical for document layout (table borders, column edges)
+
+4. **No inference cost**
+   - EMA weights stored separately during training
+   - At deployment, use EMA weights as final model
+   - Zero additional latency or memory at inference
+
+**EMA update mechanism:**
+```python
+# After each optimizer step
+ema_decay = min(0.9999, (1 + step) / (10 + step))  # Warmup
+for ema_param, model_param in zip(ema_model.parameters(), model.parameters()):
+    ema_param.data.mul_(ema_decay).add_(model_param.data, alpha=1 - ema_decay)
+```
+
+**Warmup prevents early instability:**
+* Step 0-1000: Gradual decay increase from ~0.0 → 0.9999
+* Prevents EMA from being dominated by early random initialization
+* After warmup: Fixed decay of 0.9999 (99.99% old, 0.01% new)
+
 **Checkpointing:**
 * Save every 500 steps
 * Keep best 3 checkpoints (by eval_loss)
-* Load best model at end for DocLayNet fine-tuning
+* Save both raw weights and EMA weights
+* Load best EMA model at end for DocLayNet fine-tuning
 
 **Evaluation:**
 * Every 500 steps on 1000 validation samples (full val set = 11,245 images)
 * Metrics: Loss, mAP@50, mAP@75, mAP (IoU 0.50:0.95)
+* Use EMA weights for all metric computation
 * Early stopping patience: 5 evaluations without improvement
 
 **Expected performance:**

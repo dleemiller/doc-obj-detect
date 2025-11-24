@@ -52,10 +52,17 @@ class BaseRunner:
         return ProcessorBundle(train=train_processor, eval=eval_processor)
 
     def _build_eval_size(self) -> dict[str, int]:
+        # Determine base size
         if self._aug_config and self._aug_config.get("multi_scale_sizes"):
             shortest = max(self._aug_config["multi_scale_sizes"])
         else:
             shortest = self.config.data.image_size
+
+        # If training with square resize, eval should also use square
+        if self._aug_config and self._aug_config.get("force_square_resize", False):
+            return {"height": shortest, "width": shortest}
+
+        # Otherwise use shortest_edge with optional max_long_side
         size = {"shortest_edge": shortest}
         if self._aug_config and self._aug_config.get("max_long_side"):
             size["longest_edge"] = self._aug_config["max_long_side"]
