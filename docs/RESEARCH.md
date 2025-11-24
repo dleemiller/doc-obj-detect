@@ -880,7 +880,7 @@ if self.current_epoch >= self.mosaic_disable_epoch:
 ```
 
 **Rationale:**
-* **Early training (epochs 1-10):** Heavy augmentation (mosaic + mixup) for diversity
+* **Early training (epochs 1-10):** Heavy augmentation (mosaic) for diversity
 * **Late training (epochs 11+):** Natural images only for precision refinement
 * **ICDAR 2nd place insight:** Disabled mosaic for final 20/150 epochs (13%)
 * **Our implementation:** Disable after epoch 10/12 for pretraining (17%), epoch 5/20 for fine-tuning (25%)

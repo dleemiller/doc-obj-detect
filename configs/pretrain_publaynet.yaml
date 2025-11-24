@@ -51,11 +51,6 @@ augmentation:
     probability: 0.5  # Increased to match ICDAR baseline and square640 config
     disable_after_epoch: 10  # Disable after epoch 10 like 2nd place team
 
-  # Mix-up augmentation (used in ICDAR 2023 baseline)
-  mixup:
-    probability: 0.15  # Increased to match other configs
-    alpha: 0.2  # Beta distribution parameter
-
   # Geometric augmentations
   rotate_limit: 5  # ICDAR winners used 5°
   rotate_prob: 0.5  # 50% probability

@@ -77,8 +77,13 @@ def _add_evaluate_parser(subparsers):
     parser = subparsers.add_parser("evaluate", help="Evaluate a checkpoint")
     parser.add_argument("--checkpoint", required=True, help="Checkpoint directory")
     parser.add_argument("--config", required=True, help="Path to training YAML config")
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="Number of dataloader workers (default: 0 to avoid multiprocessing issues)",
+    )
     parser.add_argument("--max-samples", type=int, default=None)
     parser.set_defaults(handler=_handle_evaluate)
 

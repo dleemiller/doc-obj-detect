@@ -168,6 +168,58 @@ class TestMosaicAugmentation:
             assert x + w <= 640, f"bbox extends beyond image width: {x + w}"
             assert y + h <= 640, f"bbox extends beyond image height: {y + h}"
 
+    def test_mosaic_degenerate_bbox_filtering(self):
+        """Test that mosaic filters out degenerate bboxes that might be created during composition."""
+        config = {
+            "multi_scale_sizes": [640],
+            "force_square_resize": True,
+            "mosaic": {"probability": 1.0},
+        }
+        augmentor = AlbumentationsAugmentor(config)
+
+        # Fill cache with boxes that might become degenerate after mosaic cropping
+        for i in range(5):
+            img = Image.new("RGB", (400, 400), color=(50 * i, 50 * i, 50 * i))
+            # Add boxes near edges that might get clipped to zero size
+            examples = {
+                "image": [img],
+                "annotations": [
+                    {
+                        "bbox": [
+                            [5, 5, 10, 10],  # Near top-left corner
+                            [390, 390, 8, 8],  # Near bottom-right corner
+                            [200, 200, 100, 100],  # Center box (should survive)
+                        ],
+                        "category_id": [1, 2, 3],
+                    }
+                ],
+            }
+            augmentor.augment(examples)
+
+        # Run multiple mosaic iterations to test robustness
+        for _ in range(20):
+            img = Image.new("RGB", (400, 400), color=(128, 128, 128))
+            examples = {
+                "image": [img],
+                "annotations": [{"bbox": [[150, 150, 120, 120]], "category_id": [1]}],
+            }
+            result = augmentor.augment(examples)
+
+            # All output boxes must be valid (no degenerate boxes)
+            for bbox in result["annotations"][0]["bbox"]:
+                assert (
+                    len(bbox) == 4
+                ), f"bbox should have exactly 4 elements, got {len(bbox)}: {bbox}"
+                x, y, w, h = bbox[:4]
+                assert w > 2.0, f"width should be > 2, got {w}"
+                assert h > 2.0, f"height should be > 2, got {h}"
+                assert x >= 0, f"x should be >= 0, got {x}"
+                assert y >= 0, f"y should be >= 0, got {y}"
+                # Check bbox doesn't extend beyond image
+                img_h, img_w = result["image"][0].shape[:2]
+                assert x + w <= img_w, f"bbox extends beyond width: {x + w} > {img_w}"
+                assert y + h <= img_h, f"bbox extends beyond height: {y + h} > {img_h}"
+
     def test_mosaic_category_preservation(self):
         """Test that mosaic preserves category IDs correctly."""
         config = {
@@ -208,70 +260,6 @@ class TestMosaicAugmentation:
         categories = result["annotations"][0]["category_id"]
         assert all(isinstance(cat, int) for cat in categories)
         assert all(cat > 0 for cat in categories)
-
-
-class TestMixUpAugmentation:
-    """Test custom mixup augmentation implementation."""
-
-    def test_mixup_blends_images(self):
-        """Test that mixup blends two images."""
-        config = {
-            "multi_scale_sizes": [640],
-            "force_square_resize": True,
-            "mixup": {"probability": 1.0, "alpha": 0.2},
-        }
-        augmentor = AlbumentationsAugmentor(config)
-
-        # Fill cache
-        for i in range(5):
-            img = Image.new("RGB", (400, 400), color=(0, 0, 0))
-            examples = {
-                "image": [img],
-                "annotations": [{"bbox": [[100 + i * 10, 100, 80, 80]], "category_id": [1]}],
-            }
-            augmentor.augment(examples)
-
-        # Test mixup
-        img = Image.new("RGB", (400, 400), color=(255, 255, 255))
-        examples = {
-            "image": [img],
-            "annotations": [{"bbox": [[200, 200, 100, 100]], "category_id": [2]}],
-        }
-        result = augmentor.augment(examples)
-
-        # Should combine bboxes from both images
-        num_bboxes = len(result["annotations"][0]["bbox"])
-        assert num_bboxes >= 2, f"MixUp should combine bboxes, got {num_bboxes}"
-
-    def test_mixup_combines_categories(self):
-        """Test that mixup combines category IDs from both images."""
-        config = {
-            "multi_scale_sizes": [640],
-            "force_square_resize": True,
-            "mixup": {"probability": 1.0, "alpha": 0.5},
-        }
-        augmentor = AlbumentationsAugmentor(config)
-
-        # Fill cache
-        for _ in range(3):
-            img = Image.new("RGB", (400, 400), color=(100, 100, 100))
-            examples = {
-                "image": [img],
-                "annotations": [{"bbox": [[50, 50, 60, 60]], "category_id": [5]}],
-            }
-            augmentor.augment(examples)
-
-        # Test mixup
-        img = Image.new("RGB", (400, 400), color=(200, 200, 200))
-        examples = {
-            "image": [img],
-            "annotations": [{"bbox": [[150, 150, 70, 70]], "category_id": [3]}],
-        }
-        result = augmentor.augment(examples)
-
-        categories = result["annotations"][0]["category_id"]
-        assert len(categories) >= 2, "MixUp should combine categories"
-        assert all(isinstance(cat, int) for cat in categories)
 
 
 class TestEpochBasedDisabling:
@@ -419,7 +407,6 @@ class TestIntegration:
             "rotate_limit": 5,
             "rotate_prob": 0.5,
             "mosaic": {"probability": 0.5},
-            "mixup": {"probability": 0.15, "alpha": 0.2},
             "brightness_contrast": {"limit": 0.2, "probability": 0.5},
             "blur": {"probability": 0.2, "blur_limit": 3},
         }

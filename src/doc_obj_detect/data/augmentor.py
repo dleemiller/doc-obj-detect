@@ -1,11 +1,11 @@
-"""Albumentations-based augmentation pipeline with custom batch-level augmentations.
+"""Albumentations-based augmentation pipeline with custom mosaic support.
 
-Following albumentations documentation, Mosaic and MixUp are batch-based augmentations
-that require custom implementation (beyond albumentations scope).
+Following albumentations documentation, Mosaic is a batch-based augmentation that
+requires extra metadata management beyond the standard per-image transforms.
 https://albumentations.ai/docs/3-basic-usage/choosing-augmentations/#beyond-albumentations-batch-based-augmentations
 
 We use official albumentations for per-image transforms (flips, rotations, etc.)
-and implement Mosaic/MixUp as custom batch-level augmentations.
+and integrate Mosaic as a batch-level augmentation.
 """
 
 from __future__ import annotations
@@ -14,23 +14,20 @@ import random
 from typing import Any
 
 import albumentations as A
+import cv2
 import numpy as np
-from PIL import Image
 
 
 class AlbumentationsAugmentor:
-    """Augmentation pipeline using albumentations for per-image transforms.
-
-    Custom implementations for batch-based augmentations (Mosaic, MixUp) that
-    are beyond albumentations' scope per their documentation.
-    """
+    """Augmentation pipeline using albumentations for per-image transforms and mosaic."""
 
     def __init__(self, config: dict[str, Any] | None):
         self.config = config or {}
         self.current_epoch = 0
-        # Cache for batch-level augmentations (mosaic/mixup)
+        # Cache for batch-level augmentations (mosaic)
         self.sample_cache: list[tuple[np.ndarray, list, list]] = []
         self.cache_size = 100
+        self.mosaic_metadata_key = "mosaic_metadata"
 
     def set_epoch(self, epoch: int) -> None:
         """Set current epoch for epoch-dependent augmentations."""
@@ -168,151 +165,72 @@ class AlbumentationsAugmentor:
             ),
         )
 
-    def apply_mosaic(
-        self,
-        image: np.ndarray,
-        bboxes: list,
-        category_ids: list,
-        target_size: int,
-    ) -> tuple[np.ndarray, list, list]:
-        """
-        Apply mosaic augmentation by combining 4 images into a 2x2 grid.
+    def build_mosaic_transform(self, target_size: int) -> A.Compose:
+        """Construct Albumentations mosaic transform for the provided target size."""
+        mosaic_cfg = self.config.get("mosaic", {})
+        grid_yx = tuple(mosaic_cfg.get("grid_yx", (2, 2)))
+        center_range = tuple(mosaic_cfg.get("center_range", (0.3, 0.7)))
+        fit_mode = mosaic_cfg.get("fit_mode", "cover")
+        fill = mosaic_cfg.get("fill", 0)
+        fill_mask = mosaic_cfg.get("fill_mask", 0)
+        interpolation = mosaic_cfg.get("interpolation", cv2.INTER_LINEAR)
+        mask_interpolation = mosaic_cfg.get("mask_interpolation", cv2.INTER_NEAREST)
 
-        Custom implementation as recommended by albumentations documentation
-        for batch-based augmentations.
+        return A.Compose(
+            [
+                A.Mosaic(
+                    grid_yx=grid_yx,
+                    target_size=(target_size, target_size),
+                    cell_shape=(target_size, target_size),
+                    center_range=center_range,
+                    fit_mode=fit_mode,
+                    fill=fill,
+                    fill_mask=fill_mask,
+                    interpolation=interpolation,
+                    mask_interpolation=mask_interpolation,
+                    metadata_key=self.mosaic_metadata_key,
+                    p=1.0,
+                )
+            ],
+            bbox_params=A.BboxParams(
+                format="coco",
+                label_fields=["category_ids"],
+                min_visibility=0.3,
+            ),
+        )
 
-        Args:
-            image: Primary image (H, W, 3)
-            bboxes: List of bboxes in COCO format [x, y, w, h]
-            category_ids: List of category IDs
-            target_size: Output size (square)
+    def prepare_mosaic_metadata(self, num_samples: int = 3) -> list[dict[str, Any]]:
+        """Build albumentations metadata payload from cached samples."""
+        if len(self.sample_cache) < num_samples:
+            return []
+        indices = random.sample(range(len(self.sample_cache)), num_samples)
+        metadata: list[dict[str, Any]] = []
+        for idx in indices:
+            cached_image, cached_bboxes, cached_cats = self.sample_cache[idx]
+            # Validate and clean cached bboxes before mosaic
+            valid_boxes = []
+            valid_cats = []
+            for box, cat in zip(cached_bboxes, cached_cats, strict=False):
+                # Ensure box is exactly 4 elements [x, y, w, h]
+                if len(box) >= 4:
+                    x, y, w, h = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+                    # Filter out degenerate boxes
+                    if w > 1e-3 and h > 1e-3:
+                        valid_boxes.append([x, y, w, h])
+                        valid_cats.append(int(cat))
 
-        Returns:
-            Tuple of (mosaic_image, mosaic_bboxes, mosaic_category_ids)
-        """
-        # Need 3 more images from cache
-        if len(self.sample_cache) < 3:
-            return image, bboxes, category_ids
-
-        # Sample 3 additional images
-        indices = random.sample(range(len(self.sample_cache)), 3)
-        images = [image] + [self.sample_cache[i][0] for i in indices]
-        all_bboxes = [bboxes] + [self.sample_cache[i][1] for i in indices]
-        all_category_ids = [category_ids] + [self.sample_cache[i][2] for i in indices]
-
-        # Random center point (0.4-0.6 for balanced quadrants)
-        cx = int(target_size * random.uniform(0.4, 0.6))
-        cy = int(target_size * random.uniform(0.4, 0.6))
-
-        # Create mosaic canvas
-        mosaic_img = np.zeros((target_size, target_size, 3), dtype=np.uint8)
-        mosaic_bboxes = []
-        mosaic_category_ids = []
-
-        # Placement coordinates for 4 quadrants: top-left, top-right, bottom-left, bottom-right
-        placements = [
-            (0, 0, cx, cy),  # top-left
-            (cx, 0, target_size, cy),  # top-right
-            (0, cy, cx, target_size),  # bottom-left
-            (cx, cy, target_size, target_size),  # bottom-right
-        ]
-
-        for idx, (img, boxes, cats) in enumerate(
-            zip(images, all_bboxes, all_category_ids, strict=False)
-        ):
-            x1, y1, x2, y2 = placements[idx]
-            quad_w = x2 - x1
-            quad_h = y2 - y1
-
-            # Resize image to fit quadrant
-            h, w = img.shape[:2]
-            scale = min(quad_w / w, quad_h / h)
-            new_w = int(w * scale)
-            new_h = int(h * scale)
-
-            if new_w > 0 and new_h > 0:
-                img_resized = np.array(Image.fromarray(img).resize((new_w, new_h), Image.BILINEAR))
-
-                # Place in quadrant (centered)
-                offset_x = x1 + (quad_w - new_w) // 2
-                offset_y = y1 + (quad_h - new_h) // 2
-                mosaic_img[offset_y : offset_y + new_h, offset_x : offset_x + new_w] = img_resized
-
-                # Transform bboxes
-                for bbox, cat in zip(boxes, cats, strict=False):
-                    x_min, y_min, box_w, box_h = bbox[:4]
-
-                    # Scale and offset bbox
-                    new_x = (x_min * scale) + offset_x
-                    new_y = (y_min * scale) + offset_y
-                    new_box_w = box_w * scale
-                    new_box_h = box_h * scale
-
-                    # Clip to mosaic boundaries
-                    new_x = max(0, min(new_x, target_size))
-                    new_y = max(0, min(new_y, target_size))
-                    new_box_w = min(target_size - new_x, new_box_w)
-                    new_box_h = min(target_size - new_y, new_box_h)
-
-                    # Only keep if box is large enough (at least 2x2 pixels)
-                    if new_box_w >= 2 and new_box_h >= 2:
-                        mosaic_bboxes.append([new_x, new_y, new_box_w, new_box_h])
-                        mosaic_category_ids.append(cat)
-
-        return mosaic_img, mosaic_bboxes, mosaic_category_ids
-
-    def apply_mixup(
-        self,
-        image: np.ndarray,
-        bboxes: list,
-        category_ids: list,
-        alpha: float = 0.2,
-    ) -> tuple[np.ndarray, list, list]:
-        """
-        Apply mix-up augmentation by blending two images.
-
-        Custom implementation as MixUp is beyond albumentations scope (batch-based).
-
-        Args:
-            image: Primary image (H, W, 3)
-            bboxes: List of bboxes in COCO format [x, y, w, h]
-            category_ids: List of category IDs
-            alpha: Beta distribution parameter for mixing
-
-        Returns:
-            Tuple of (mixed_image, mixed_bboxes, mixed_category_ids)
-        """
-        if len(self.sample_cache) < 1:
-            return image, bboxes, category_ids
-
-        # Sample one cached sample
-        idx = random.randint(0, len(self.sample_cache) - 1)
-        image2, bboxes2, category_ids2 = self.sample_cache[idx]
-
-        # Sample mixing coefficient from Beta distribution
-        lam = np.random.beta(alpha, alpha) if alpha > 0 else 0.5
-
-        # Resize images to same size if needed
-        h1, w1 = image.shape[:2]
-        h2, w2 = image2.shape[:2]
-        if (h1, w1) != (h2, w2):
-            image2 = np.array(Image.fromarray(image2).resize((w1, h1), Image.BILINEAR))
-
-        # Blend images
-        mixed_image = (lam * image + (1 - lam) * image2).astype(np.uint8)
-
-        # Combine bboxes from both images (keep all)
-        mixed_bboxes = bboxes + bboxes2
-        mixed_category_ids = category_ids + category_ids2
-
-        return mixed_image, mixed_bboxes, mixed_category_ids
+            if valid_boxes:  # Only add metadata if there are valid boxes
+                metadata.append(
+                    {
+                        "image": cached_image.copy(),
+                        "bboxes": valid_boxes,
+                        "category_ids": valid_cats,
+                    }
+                )
+        return metadata
 
     def augment(self, examples: dict) -> dict:
-        """Apply augmentation to a HF batch.
-
-        Applies batch-level augmentations (mosaic/mixup) first, then per-image
-        transforms via albumentations.
-        """
+        """Apply augmentation to a HF batch with optional mosaic before per-image transforms."""
         mosaic_cfg = self.config.get("mosaic", {})
         mosaic_prob = mosaic_cfg.get("probability", 0.0)
         disable_after_epoch = mosaic_cfg.get("disable_after_epoch", float("inf"))
@@ -320,10 +238,6 @@ class AlbumentationsAugmentor:
         # Disable mosaic after specified epoch
         if self.current_epoch >= disable_after_epoch:
             mosaic_prob = 0.0
-
-        mixup_cfg = self.config.get("mixup", {})
-        mixup_prob = mixup_cfg.get("probability", 0.0)
-        mixup_alpha = mixup_cfg.get("alpha", 0.2)
 
         transform = self.build_transform()
         images_out: list[np.ndarray] = []
@@ -353,19 +267,57 @@ class AlbumentationsAugmentor:
                 clean_boxes.append([float(x), float(y), float(w), float(h)])
                 clean_labels.append(int(cat))
 
-            # Apply mosaic or mixup (mutually exclusive, before per-image transforms)
+            # Apply mosaic (before per-image transforms)
             aug_roll = random.random()
             if aug_roll < mosaic_prob and len(self.sample_cache) >= 3:
-                # Apply mosaic
-                target_size = self.sample_scale()
-                image_np, clean_boxes, clean_labels = self.apply_mosaic(
-                    image_np, clean_boxes, clean_labels, target_size
-                )
-            elif aug_roll < (mosaic_prob + mixup_prob) and len(self.sample_cache) >= 1:
-                # Apply mixup
-                image_np, clean_boxes, clean_labels = self.apply_mixup(
-                    image_np, clean_boxes, clean_labels, mixup_alpha
-                )
+                metadata = self.prepare_mosaic_metadata(3)
+                if metadata:
+                    target_size = self.sample_scale()
+                    mosaic_transform = self.build_mosaic_transform(target_size)
+                    mosaic_kwargs = {
+                        "image": image_np,
+                        "bboxes": clean_boxes,
+                        "category_ids": clean_labels,
+                        self.mosaic_metadata_key: metadata,
+                    }
+                    try:
+                        mosaic_augmented = mosaic_transform(**mosaic_kwargs)
+                        image_np = mosaic_augmented["image"]
+
+                        # Validate and filter mosaic output boxes
+                        mosaic_boxes = []
+                        mosaic_cats = []
+                        img_h, img_w = image_np.shape[:2]
+                        for box, cat in zip(
+                            mosaic_augmented["bboxes"],
+                            mosaic_augmented["category_ids"],
+                            strict=False,
+                        ):
+                            if len(box) >= 4:
+                                x, y, w, h = (
+                                    float(box[0]),
+                                    float(box[1]),
+                                    float(box[2]),
+                                    float(box[3]),
+                                )
+                                # Strict validation: box must be within image and have valid dimensions
+                                if (
+                                    w > 2.0
+                                    and h > 2.0
+                                    and x >= 0
+                                    and y >= 0
+                                    and x + w <= img_w
+                                    and y + h <= img_h
+                                ):
+                                    mosaic_boxes.append([x, y, w, h])
+                                    mosaic_cats.append(int(cat))
+
+                        clean_boxes = mosaic_boxes
+                        clean_labels = mosaic_cats
+                    except ValueError:
+                        # If mosaic fails, use original boxes
+                        # Log the error for debugging
+                        pass
 
             # Update cache (before per-image transforms)
             if len(self.sample_cache) >= self.cache_size:

@@ -89,10 +89,17 @@ class EvaluatorRunner:
         return model, processor
 
     def _build_eval_size(self) -> dict[str, int]:
+        # Determine base size
         if self._aug_config and self._aug_config.get("multi_scale_sizes"):
             eval_short_side = max(self._aug_config["multi_scale_sizes"])
         else:
             eval_short_side = self.config.data.image_size
+
+        # If training with square resize, eval should also use square
+        if self._aug_config and self._aug_config.get("force_square_resize", False):
+            return {"height": eval_short_side, "width": eval_short_side}
+
+        # Otherwise use shortest_edge with optional max_long_side
         eval_size = {"shortest_edge": eval_short_side}
         if self._aug_config and self._aug_config.get("max_long_side"):
             eval_size["longest_edge"] = self._aug_config["max_long_side"]
@@ -193,8 +200,10 @@ class EvaluatorRunner:
             threshold=0.0,
             max_eval_images=max_eval_samples if max_eval_samples else 2000,
         )
-        metrics["eval_loss"] = avg_loss
-        return metrics
+        # Prefix all metrics with 'eval_' to match expected format
+        eval_metrics = {f"eval_{k}": v for k, v in metrics.items()}
+        eval_metrics["eval_loss"] = avg_loss
+        return eval_metrics
 
     def _pretty_print(self, metrics: dict[str, float], checkpoint_path: str, num_samples: int):
         metric_names = {

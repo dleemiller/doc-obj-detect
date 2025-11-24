@@ -45,11 +45,6 @@ augmentation:
     probability: 0.3  # Lower than pretraining (0.5) - conservative fine-tuning
     disable_after_epoch: 5  # Disable early (out of 20 total) to focus on real DocLayNet patterns
 
-  # Mix-up augmentation (used in ICDAR 2023 baseline)
-  mixup:
-    probability: 0.15
-    alpha: 0.2
-
   # Geometric augmentations
   rotate_limit: 5  # ICDAR winners used 5°
   rotate_prob: 0.5

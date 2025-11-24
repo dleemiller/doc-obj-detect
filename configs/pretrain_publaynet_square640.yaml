@@ -4,11 +4,11 @@
 
 model:
   backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (~200M params)
-  architecture: dfine_xlarge  # D-FINE XLarge architecture
+  architecture: "dfine_xlarge"  # D-FINE XLarge architecture
   num_classes: 5  # PubLayNet: text, title, list, table, figure
   use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 weights
-  freeze_backbone: true  # Let the decoder stabilize against frozen ConvNeXt features
-  freeze_backbone_epochs: 2  # Unfreeze after 2 epochs
+  freeze_backbone: false  # Let the decoder stabilize against frozen ConvNeXt features
+  freeze_backbone_epochs: null  # Unfreeze after 2 epochs
 
 dfine:
   encoder_in_channels: [384, 768, 1536]  # ConvNeXt-Large channel dimensions
@@ -22,14 +22,14 @@ data:
   train_split: "train"
   val_split: "validation"
   image_size: 640  # Base square size
-  batch_size: 16
+  batch_size: 32
   max_eval_samples: 1000
   num_workers: 4
 
 augmentation:
   # ICDAR 2023 competition strategy: square resizing with multi-scale
   force_square_resize: true  # Force square 640x640 like ICDAR baseline
-  multi_scale_sizes: [576, 608, 640, 672, 704]  # Multi-scale training at square sizes
+  multi_scale_sizes: [448, 480, 512, 544, 576, 608, 640]  # Multi-scale training at square sizes
 
   # Flip augmentations (essential for layout detection - ICDAR 2023 & DocLayout-YOLO)
   horizontal_flip: 0.5  # Standard horizontal flip (matches papers)
@@ -45,11 +45,6 @@ augmentation:
   mosaic:
     probability: 0.5  # 50% chance to apply mosaic (4-image grid)
     disable_after_epoch: 10  # Disable after epoch 10 like 2nd place team
-
-  # Mix-up augmentation (used in ICDAR baseline)
-  mixup:
-    probability: 0.15  # 15% chance when not using mosaic
-    alpha: 0.2  # Beta distribution parameter for mixing coefficient
 
   # Geometric augmentations
   rotate_limit: 5  # ICDAR winners used 5°
@@ -83,7 +78,7 @@ training:
   num_train_epochs: 12
 
   # Learning rates
-  learning_rate: 1.25e-4
+  learning_rate: 2.5e-4
   backbone_lr_multiplier: 0.01
 
   # Optimizer settings
@@ -94,13 +89,13 @@ training:
   lr_scheduler_type: "cosine_with_min_lr"
   warmup_ratio: 0.08
   lr_scheduler_kwargs:
-    min_lr: 1.25e-5
+    min_lr: 2.5e-5
 
   # Gradient settings
   gradient_accumulation_steps: 1
   max_grad_norm: 0.1
-  backbone_max_grad_norm: 0.1
-  head_max_grad_norm: 0.1
+  #backbone_max_grad_norm: 0.1
+  #head_max_grad_norm: 0.1
 
   # Mixed precision
   bf16: true
@@ -128,4 +123,4 @@ output:
   output_dir: "outputs/pretrain_publaynet_square640"
   checkpoint_dir: "outputs/pretrain_publaynet_square640/checkpoints"
   log_dir: "outputs/pretrain_publaynet_square640/logs"
-  run_name: "square640_mosaic_mixup_flips"
+  run_name: "square640_mosaic_flips"

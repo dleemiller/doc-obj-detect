@@ -2,11 +2,11 @@
 
 ## Summary
 
-Implemented ICDAR 2023 competition-winning augmentation strategies for document object detection following **albumentations best practices**. Per their documentation, Mosaic and MixUp are batch-based augmentations that require custom implementation (beyond albumentations scope). We use official albumentations for per-image transforms (flips, rotations, photometric) and well-tested custom implementations for batch-level augmentations.
+Implemented ICDAR 2023 competition-winning augmentation strategies for document object detection following **albumentations best practices**. Per their documentation, Mosaic is a batch-based augmentation that requires custom metadata handling beyond the standard `Compose`. We use official albumentations for per-image transforms (flips, rotations, photometric) and a tested cache-driven workflow for Mosaic.
 
 **Architecture**:
 - ✅ **Per-image transforms**: Official albumentations (HorizontalFlip, VerticalFlip, Rotate, etc.)
-- ✅ **Batch-level augmentations**: Custom implementations (Mosaic, MixUp) with comprehensive test coverage
+- ✅ **Batch-level augmentations**: Albumentations `Mosaic` driven by our caching metadata
 - ✅ **21 passing tests**: Full test suite verifying correctness, bbox handling, edge cases
 
 ## Changes Made
@@ -34,18 +34,6 @@ Implemented ICDAR 2023 competition-winning augmentation strategies for document 
     disable_after_epoch: 10       # Disable after epoch 10 (like 2nd place team)
   ```
 
-#### ✅ Mix-up Augmentation
-- Used in ICDAR 2023 baseline
-- **Custom implementation** (albumentations doesn't provide MixUp for object detection)
-- Blends two images using Beta distribution (alpha=0.2)
-- Simple, well-tested implementation with proper bbox handling
-- Configuration:
-  ```yaml
-  mixup:
-    probability: 0.15   # 15% chance (when not using mosaic)
-    alpha: 0.2          # Beta distribution parameter
-  ```
-
 #### ✅ Epoch-based Augmentation Control
 - Added `set_epoch(epoch)` method to track current training epoch
 - Automatically disables mosaic after specified epoch (following ICDAR 2nd place strategy)
@@ -56,20 +44,18 @@ Implemented ICDAR 2023 competition-winning augmentation strategies for document 
 #### **configs/pretrain_publaynet.yaml**
 - Added flips (horizontal: 0.5, vertical: 0.1)
 - Added mosaic (prob: 0.4, disable after epoch 10)
-- Added mixup (prob: 0.1, alpha: 0.2)
 - Increased rotation from 3° to 5° (ICDAR winners used 5°)
 - Increased rotation probability from 0.3 to 0.5
 
 #### **configs/finetune_doclaynet.yaml**
 - Added flips (horizontal: 0.5, vertical: 0.1)
 - Added mosaic (prob: 0.5, disable after epoch 15 of 20 total)
-- Added mixup (prob: 0.15, alpha: 0.2)
 - Higher mosaic probability for fine-tuning on target dataset
 
 #### **configs/pretrain_publaynet_square640.yaml** (NEW)
 - Square 640×640 resolution following ICDAR 2023 baseline (1024×1024)
 - Multi-scale training at square sizes: [576, 608, 640, 672, 704]
-- Full augmentation suite with mosaic, mixup, and flips
+- Full augmentation suite with mosaic and flips
 - Designed for comparison with native aspect ratio approach
 
 ### 3. **Code Improvements**
@@ -80,7 +66,6 @@ Implemented ICDAR 2023 competition-winning augmentation strategies for document 
 - **augmentor.py:35-148**: Refactored `build_transform()` to support `A.Mosaic` via metadata
 - **augmentor.py:52-61**: Integrated official `A.Mosaic` with proper configuration
 - **augmentor.py:96-102**: Added horizontal/vertical flip using albumentations built-ins
-- **augmentor.py:150-189**: Kept simple custom `apply_mixup()` (not available in albumentations)
 - **augmentor.py:323-356**: Mosaic metadata preparation and `A.Mosaic` invocation
 - **augmentor.py:283-285**: Epoch-based mosaic disabling logic
 - **augmentor.py:296-299**: Robust numpy array/PIL image handling
@@ -96,7 +81,6 @@ uv run pytest tests/test_data.py -v
 Verified augmentations work correctly:
 - ✅ Flip augmentations (using `A.HorizontalFlip` and `A.VerticalFlip`)
 - ✅ Mosaic augmentation (using official `A.Mosaic`)
-- ✅ Mix-up augmentation (custom implementation)
 - ✅ Epoch-based disable functionality
 - ✅ Proper metadata handling for `A.Mosaic`
 - ✅ Graceful fallback if augmentations fail
@@ -154,7 +138,7 @@ Verified augmentations work correctly:
    uv run train --config configs/pretrain_publaynet.yaml
    ```
 
-3. **Monitor mosaic/mixup effectiveness:**
+3. **Monitor mosaic effectiveness:**
    - Check if mAP improves when mosaic is disabled (epoch 10+)
    - Consider adjusting `disable_after_epoch` based on results
 
@@ -180,7 +164,7 @@ Verified augmentations work correctly:
 
 ## Files Modified
 
-1. `src/doc_obj_detect/data/augmentor.py` - Added mosaic, mixup, flips, epoch tracking
+1. `src/doc_obj_detect/data/augmentor.py` - Added mosaic, flips, epoch tracking
 2. `configs/pretrain_publaynet.yaml` - Updated with new augmentations
 3. `configs/finetune_doclaynet.yaml` - Updated with new augmentations
 4. `configs/pretrain_publaynet_square640.yaml` - **NEW** square 640 config
