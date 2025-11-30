@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None) -> None:
     _add_evaluate_parser(subparsers)
     _add_distill_parser(subparsers)
     _add_visualize_parser(subparsers)
+    _add_finalize_parser(subparsers)
     _add_dataset_info_parser(subparsers)
     _add_bbox_hist_parser(subparsers)
     _add_analyze_multiscale_parser(subparsers)
@@ -100,7 +101,49 @@ def _add_visualize_parser(subparsers):
     parser.add_argument("--num-samples", type=int, default=4)
     parser.add_argument("--output-dir", type=str, default="outputs/augmentation_samples")
     parser.add_argument("--cache-dir", type=str, default=None)
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["simple", "comparison"],
+        default="simple",
+        help="Visualization mode: 'simple' for original vs augmented, "
+        "'comparison' for photometric vs augraphy 3-way comparison",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config YAML for augmentation settings (optional)",
+    )
     parser.set_defaults(handler=_handle_visualize)
+
+
+def _add_finalize_parser(subparsers):
+    parser = subparsers.add_parser(
+        "finalize",
+        help="Prepare checkpoint for HuggingFace upload (removes training artifacts, promotes EMA weights)",
+    )
+    parser.add_argument(
+        "checkpoint",
+        type=str,
+        help="Path to training checkpoint directory",
+    )
+    parser.add_argument(
+        "output",
+        type=str,
+        help="Output directory for finalized model",
+    )
+    parser.add_argument(
+        "--no-ema",
+        action="store_true",
+        help="Use regular weights instead of EMA weights",
+    )
+    parser.add_argument(
+        "--no-readme",
+        action="store_true",
+        help="Skip generating README.md template",
+    )
+    parser.set_defaults(handler=_handle_finalize)
 
 
 def _add_dataset_info_parser(subparsers):
@@ -214,6 +257,19 @@ def _handle_visualize(args):
         num_samples=args.num_samples,
         output_dir=args.output_dir,
         cache_dir=args.cache_dir,
+        mode=args.mode,
+        config_path=args.config,
+    )
+
+
+def _handle_finalize(args):
+    from doc_obj_detect.cli.finalize import finalize_checkpoint
+
+    finalize_checkpoint(
+        checkpoint_path=args.checkpoint,
+        output_path=args.output,
+        use_ema=not args.no_ema,
+        create_readme=not args.no_readme,
     )
 
 

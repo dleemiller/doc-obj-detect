@@ -165,16 +165,95 @@ class ModelEMA:
 
     def state_dict(self) -> dict:
         """Get EMA state for checkpointing."""
+        # Get full state dict
+        full_state_dict = self.module.state_dict()
+
+        # Remove duplicate keys that share memory (D-FINE creates aliases for decoder heads)
+        # Keep unprefixed keys (class_embed.*, bbox_embed.*) and remove prefixed duplicates
+        deduplicated = self._deduplicate_state_dict(full_state_dict)
+
         return {
-            "module": self.module.state_dict(),
+            "module": deduplicated,
             "updates": self.updates,
             "decay": self.decay,
             "warmup_steps": self.warmup_steps,
         }
 
+    @staticmethod
+    def _deduplicate_state_dict(state_dict: dict) -> dict:
+        """Remove duplicate keys that share memory.
+
+        D-FINE models sometimes have both 'model.decoder.X' and 'X' keys pointing to same tensor.
+        This happens because decoder heads (class_embed, bbox_embed) are aliased at module level.
+        We keep the unprefixed keys and remove the prefixed duplicates to avoid issues with
+        safetensors format, which cannot handle shared memory tensors.
+        """
+        # Build a mapping of data_ptr -> list of keys that share that memory
+        ptr_to_keys: dict[int, list[str]] = {}
+        for key, tensor in state_dict.items():
+            if isinstance(tensor, torch.Tensor):
+                ptr = tensor.data_ptr()
+                if ptr not in ptr_to_keys:
+                    ptr_to_keys[ptr] = []
+                ptr_to_keys[ptr].append(key)
+
+        # Identify which keys to keep
+        keys_to_remove = set()
+        for ptr, keys in ptr_to_keys.items():
+            if len(keys) > 1:
+                # Multiple keys share memory - keep the shortest/cleanest one
+                # Prefer unprefixed keys (e.g., 'class_embed.*') over prefixed ('model.decoder.class_embed.*')
+                keys_sorted = sorted(keys, key=lambda k: (len(k), k))
+                # Keep first (shortest), remove the rest
+                keys_to_remove.update(keys_sorted[1:])
+
+        # Create deduplicated state dict
+        deduplicated = {k: v for k, v in state_dict.items() if k not in keys_to_remove}
+
+        if keys_to_remove:
+            logger.info(
+                "[EMA] Removed %d duplicate keys (shared memory) from state dict",
+                len(keys_to_remove),
+            )
+
+        return deduplicated
+
     def load_state_dict(self, state_dict: dict) -> None:
-        """Load EMA state from checkpoint."""
-        self.module.load_state_dict(state_dict["module"])
+        """Load EMA state from checkpoint.
+
+        Uses strict=False to handle deduplicated state dicts that may be missing
+        alias keys (e.g., 'model.decoder.class_embed.*' when 'class_embed.*' exists).
+        """
+        # Load with strict=False to allow missing alias keys
+        # The deduplicated state may only have shorter keys (class_embed.*)
+        # but the model has both short and long keys (model.decoder.class_embed.*) as aliases
+        missing_keys, unexpected_keys = self.module.load_state_dict(state_dict["module"], strict=False)
+
+        # Filter out expected missing keys (decoder head aliases)
+        # These are prefixed versions of keys that exist in unprefixed form
+        unexpected_missing = []
+        for key in missing_keys:
+            # Check if this is a known alias pattern
+            if key.startswith("model.decoder."):
+                short_key = key.replace("model.decoder.", "", 1)
+                # If the short version exists in loaded state, this is just an alias - OK
+                if short_key not in state_dict["module"]:
+                    unexpected_missing.append(key)
+            else:
+                unexpected_missing.append(key)
+
+        if unexpected_missing:
+            logger.warning(
+                "[EMA] Unexpected missing keys when loading EMA state: %s",
+                unexpected_missing[:10],  # Show first 10
+            )
+
+        if unexpected_keys:
+            logger.warning(
+                "[EMA] Unexpected keys in loaded EMA state: %s",
+                unexpected_keys[:10],  # Show first 10
+            )
+
         self.updates = state_dict.get("updates", 0)
         self.decay = state_dict.get("decay", self.decay)
         self.warmup_steps = state_dict.get("warmup_steps", self.warmup_steps)
@@ -246,7 +325,40 @@ class EMACallback(TrainerCallback):
         from pathlib import Path
 
         ema_state_loaded = False
-        if args.output_dir:
+
+        # Check if we're loading from a specific checkpoint (from --load or --resume flags)
+        # The model would have already been loaded from this checkpoint
+        # Look for the checkpoint path in the training state
+        checkpoint_to_load = None
+
+        # Try to get checkpoint from TrainingArguments
+        if hasattr(args, '_checkpoint_for_ema'):
+            checkpoint_to_load = args._checkpoint_for_ema
+        elif hasattr(args, 'resume_from_checkpoint') and args.resume_from_checkpoint:
+            checkpoint_to_load = args.resume_from_checkpoint
+
+        if checkpoint_to_load:
+            # Load EMA from the specified checkpoint
+            ema_path = Path(checkpoint_to_load) / "ema_state.pt"
+            if ema_path.exists():
+                try:
+                    import torch
+
+                    ema_state_dict = torch.load(ema_path, map_location=device)
+                    self.ema.load_state_dict(ema_state_dict)
+                    logger.info(
+                        "[EMA] Restored EMA state from specified checkpoint: %s (updates=%d)",
+                        ema_path,
+                        self.ema.updates,
+                    )
+                    ema_state_loaded = True
+                except Exception as e:
+                    logger.warning(
+                        "[EMA] Failed to load EMA state from %s: %s", ema_path, e
+                    )
+
+        # Fallback: if no specific checkpoint, try to find the most recent one in output_dir
+        if not ema_state_loaded and args.output_dir:
             output_path = Path(args.output_dir)
 
             # Try to find the most recent checkpoint with EMA state
@@ -262,7 +374,7 @@ class EMACallback(TrainerCallback):
                             ema_state_dict = torch.load(ema_path, map_location=device)
                             self.ema.load_state_dict(ema_state_dict)
                             logger.info(
-                                "[EMA] Restored EMA state from checkpoint: %s (updates=%d)",
+                                "[EMA] Restored EMA state from latest checkpoint: %s (updates=%d)",
                                 ema_path,
                                 self.ema.updates,
                             )
