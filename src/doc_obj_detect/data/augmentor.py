@@ -17,6 +17,63 @@ import albumentations as A
 import cv2
 import numpy as np
 
+from augraphy import *
+try:
+    from augraphy import AugraphyPipeline
+    AUGRAPHY_AVAILABLE = True
+except ImportError:
+    AUGRAPHY_AVAILABLE = False
+
+
+class SobelEdgeExtraction(A.ImageOnlyTransform):
+    """Sobel edge detection to enhance document boundaries (DocLayout-YOLO approach).
+
+    This augmentation applies Sobel filtering to extract edges and blends them with
+    the original image. It helps the model learn document structure boundaries such as
+    table borders, column edges, and text block boundaries.
+
+    Args:
+        blend_alpha: Weight of edge image in the blend (0.0-1.0). Higher values create
+                    stronger edge emphasis. Default: 0.2 (20% edge, 80% original).
+        always_apply: Whether to always apply this transform. Default: False.
+        p: Probability of applying the transform. Default: 0.2.
+    """
+
+    def __init__(self, blend_alpha: float = 0.2, always_apply: bool = False, p: float = 0.2):
+        super().__init__(always_apply, p)
+        self.blend_alpha = blend_alpha
+
+    def apply(self, img: np.ndarray, **params) -> np.ndarray:
+        """Apply Sobel edge extraction and blend with original image."""
+        # Convert to grayscale for edge detection
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Apply Sobel operators in X and Y directions
+        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+
+        # Compute gradient magnitude
+        magnitude = np.sqrt(sobelx**2 + sobely**2)
+
+        # Normalize to 0-255 range
+        magnitude = np.clip(magnitude / magnitude.max() * 255, 0, 255).astype(np.uint8)
+
+        # Convert edge map back to RGB
+        edge_rgb = cv2.cvtColor(magnitude, cv2.COLOR_GRAY2BGR)
+
+        # Blend edge map with original image
+        blended = cv2.addWeighted(
+            img, 1.0 - self.blend_alpha,
+            edge_rgb, self.blend_alpha,
+            0
+        )
+
+        return blended
+
+    def get_transform_init_args_names(self) -> tuple[str, ...]:
+        """Return parameter names for serialization."""
+        return ("blend_alpha",)
+
 
 class AlbumentationsAugmentor:
     """Augmentation pipeline using albumentations for per-image transforms and mosaic."""
@@ -26,12 +83,372 @@ class AlbumentationsAugmentor:
         self.current_epoch = 0
         # Cache for batch-level augmentations (mosaic)
         self.sample_cache: list[tuple[np.ndarray, list, list]] = []
-        self.cache_size = 100
+        self.cache_size = 20  # Reduced from 100 to lower RAM usage with multiple workers
         self.mosaic_metadata_key = "mosaic_metadata"
+
+        # Initialize Augraphy pipeline if enabled
+        self.augraphy_pipeline = None
+        augraphy_cfg = self.config.get("augraphy", {})
+        if augraphy_cfg.get("enabled", False):
+            if not AUGRAPHY_AVAILABLE:
+                raise ImportError(
+                    "Augraphy is enabled in config but not installed. "
+                    "Install it with: uv add augraphy"
+                )
+            self.augraphy_pipeline = self._build_augraphy_pipeline(augraphy_cfg)
 
     def set_epoch(self, epoch: int) -> None:
         """Set current epoch for epoch-dependent augmentations."""
         self.current_epoch = epoch
+
+    def _build_augraphy_pipeline(self, augraphy_cfg: dict[str, Any]) -> AugraphyPipeline:
+        """Build Augraphy pipeline for document-specific augmentations.
+
+        Augraphy provides realistic document degradation effects like:
+        - Paper texture and quality variations
+        - Ink bleeding and fading
+        - Scanner artifacts
+        - Printing defects
+        - Document aging effects
+        """
+        from augraphy import (
+            AugraphyPipeline,
+            BindingsAndFasteners,
+            Brightness,
+            BrightnessTexturize,
+            ColorPaper,
+            ColorShift,
+            DotMatrix,
+            Dithering,
+            DirtyRollers,
+            DoubleExposure,
+            Faxify,
+            GlitchEffect,
+            Gamma,
+            InkBleed,
+            InkColorSwap,
+            InkMottling,
+            InkMottling as InkMottlingPost,
+            Jpeg,
+            LinesDegradation,
+            LowInkPeriodicLines,
+            LowInkRandomLines,
+            Markup,
+            OneOf,
+            PatternGenerator,
+            Scribbles,
+            SectionShift,
+            ShadowCast,
+            Squish,
+            SubtleNoise,
+            NoisyLines,
+            NoiseTexturize,
+            WaterMark,
+        )
+
+        # Per-phase probabilities (allow fine-grained control)
+        # Use per-phase probabilities if specified, otherwise fall back to global probability
+        default_prob = augraphy_cfg.get("probability", 0.5)
+        prob_ink = augraphy_cfg.get("ink_probability", default_prob)
+        prob_paper = augraphy_cfg.get("paper_probability", default_prob)
+        prob_post = augraphy_cfg.get("post_probability", default_prob)
+
+        # Mirror default pipeline structure but keep fast (>=0.5 img/sec) and avoid crop/rotate
+        ink_phase = [
+            InkColorSwap(
+                ink_swap_color="random",
+                ink_swap_sequence_number_range=(5, 10),
+                ink_swap_min_width_range=(2, 3),
+                ink_swap_max_width_range=(100, 120),
+                ink_swap_min_height_range=(2, 3),
+                ink_swap_max_height_range=(100, 120),
+                ink_swap_min_area_range=(10, 20),
+                ink_swap_max_area_range=(400, 500),
+                p=prob_ink * 0.2,
+            ),
+            LinesDegradation(
+                line_roi=(0.0, 0.0, 1.0, 1.0),
+                line_gradient_range=(32, 255),
+                line_gradient_direction=(0, 2),
+                line_split_probability=(0.2, 0.4),
+                line_replacement_value=(250, 255),
+                line_min_length=(30, 40),
+                line_long_to_short_ratio=(5, 7),
+                line_replacement_probability=(0.4, 0.5),
+                line_replacement_thickness=(1, 3),
+                p=prob_ink * 0.2,
+            ),
+            OneOf(
+                [
+                    Dithering(
+                        dither=random.choice(["ordered", "floyd-steinberg"]),
+                        order=(3, 5),
+                    ),
+                    InkBleed(
+                        intensity_range=(0.1, 0.2),
+                        kernel_size=random.choice([(7, 7), (5, 5), (3, 3)]),
+                        severity=(0.4, 0.6),
+                    ),
+                ],
+                p=prob_ink * 0.2,
+            ),
+            InkMottling(
+                ink_mottling_alpha_range=(0.2, 0.3),
+                ink_mottling_noise_scale_range=(2, 2),
+                ink_mottling_gaussian_kernel_range=(3, 5),
+                p=prob_ink * 0.2,
+            ),
+            OneOf(
+                [
+                    LowInkRandomLines(
+                        count_range=(5, 10),
+                        use_consistent_lines=random.choice([True, False]),
+                        noise_probability=0.1,
+                    ),
+                    LowInkPeriodicLines(
+                        count_range=(2, 5),
+                        period_range=(16, 32),
+                        use_consistent_lines=random.choice([True, False]),
+                        noise_probability=0.1,
+                    ),
+                ],
+                p=prob_ink * 0.2,
+            ),
+        ]
+
+        paper_phase = [
+            ColorPaper(
+                hue_range=(0, 255),
+                saturation_range=(10, 40),
+                p=prob_paper * 0.2,
+            ),
+            OneOf(
+                [
+                    PatternGenerator(
+                        imgx=random.randint(256, 512),
+                        imgy=random.randint(256, 512),
+                        n_rotation_range=(10, 15),
+                        color="random",
+                        alpha_range=(0.25, 0.5),
+                    ),
+                    SubtleNoise(
+                        subtle_range=random.randint(5, 10),
+                    ),
+                    DirtyRollers(
+                        line_width_range=(2, 32),
+                        scanline_type=0,
+                    ),
+                    DoubleExposure(),
+                ],
+                p=prob_paper * 0.2,
+            ),
+            WaterMark(
+                watermark_word="random",
+                watermark_font_size=(10, 15),
+                watermark_font_thickness=(20, 25),
+                watermark_rotation=(0, 360),
+                watermark_location="random",
+                watermark_color="random",
+                watermark_method="darken",
+                p=prob_paper * 0.05,
+            ),
+            OneOf(
+                [
+                    NoiseTexturize(
+                        sigma_range=(3, 10),
+                        turbulence_range=(2, 5),
+                        texture_width_range=(300, 500),
+                        texture_height_range=(300, 500),
+                    ),
+                    BrightnessTexturize(
+                        texturize_range=(0.9, 0.99),
+                        deviation=0.03,
+                    ),
+                ],
+                p=prob_paper * 0.2,
+            ),
+        ]
+
+        post_phase = [
+            OneOf(
+                [
+                    GlitchEffect(
+                        glitch_direction="random",
+                        glitch_number_range=(8, 16),
+                        glitch_size_range=(5, 50),
+                        glitch_offset_range=(10, 50),
+                    ),
+                    ColorShift(
+                        color_shift_offset_x_range=(3, 5),
+                        color_shift_offset_y_range=(3, 5),
+                        color_shift_iterations=(2, 3),
+                        color_shift_brightness_range=(0.9, 1.1),
+                        color_shift_gaussian_kernel_range=(3, 3),
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            OneOf(
+                [
+                    DirtyRollers(
+                        line_width_range=(2, 32),
+                        scanline_type=0,
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            OneOf(
+                [
+                    Brightness(
+                        brightness_range=(0.9, 1.1),
+                        min_brightness=0,
+                        min_brightness_value=(120, 150),
+                    ),
+                    Gamma(
+                        gamma_range=(0.9, 1.1),
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            OneOf(
+                [
+                    SubtleNoise(
+                        subtle_range=random.randint(5, 10),
+                    ),
+                    Jpeg(
+                        quality_range=(25, 95),
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            # Markup/Scribbles disabled due to upstream ink generator float std bug
+            # OneOf block removed to avoid random.randint numpy.float64 errors
+            OneOf(
+                [
+                    ShadowCast(
+                        shadow_side="random",
+                        shadow_vertices_range=(1, 20),
+                        shadow_width_range=(0.3, 0.8),
+                        shadow_height_range=(0.3, 0.8),
+                        shadow_color=(0, 0, 0),
+                        shadow_opacity_range=(0.2, 0.9),
+                        shadow_iterations_range=(1, 2),
+                        shadow_blur_kernel_range=(101, 301),
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            OneOf(
+                [
+                    NoisyLines(
+                        noisy_lines_direction="random",
+                        noisy_lines_location="random",
+                        noisy_lines_number_range=(5, 20),
+                        noisy_lines_color=(0, 0, 0),
+                        noisy_lines_thickness_range=(1, 2),
+                        noisy_lines_random_noise_intensity_range=(0.01, 0.1),
+                        noisy_lines_length_interval_range=(0, 100),
+                        noisy_lines_gaussian_kernel_value_range=(3, 5),
+                        noisy_lines_overlay_method="ink_to_paper",
+                    ),
+                    BindingsAndFasteners(
+                        overlay_types="darken",
+                        foreground=None,
+                        effect_type="random",
+                        width_range="random",
+                        height_range="random",
+                        angle_range=(-30, 30),
+                        ntimes=(2, 6),
+                        nscales=(0.9, 1.0),
+                        edge="random",
+                        edge_offset=(10, 50),
+                        use_figshare_library=0,
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            OneOf(
+                [
+                    Squish(
+                        squish_direction="random",
+                        squish_location="random",
+                        squish_number_range=(5, 10),
+                        squish_distance_range=(5, 7),
+                        squish_line="random",
+                        squish_line_thickness_range=(1, 1),
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            OneOf(
+                [
+                    DotMatrix(
+                        dot_matrix_shape="random",
+                        dot_matrix_dot_width_range=(3, 3),
+                        dot_matrix_dot_height_range=(3, 3),
+                        dot_matrix_min_width_range=(1, 2),
+                        dot_matrix_max_width_range=(150, 200),
+                        dot_matrix_min_height_range=(1, 2),
+                        dot_matrix_max_height_range=(150, 200),
+                        dot_matrix_min_area_range=(10, 20),
+                        dot_matrix_max_area_range=(2000, 5000),
+                        dot_matrix_median_kernel_value_range=(128, 255),
+                        dot_matrix_gaussian_kernel_value_range=(1, 3),
+                        dot_matrix_rotate_value_range=(0, 360),
+                    ),
+                    Faxify(
+                        scale_range=(0.3, 0.6),
+                        monochrome=random.choice([0, 1]),
+                        monochrome_method="random",
+                        monochrome_arguments={},
+                        halftone=random.choice([0, 1]),
+                        invert=1,
+                        half_kernel_size=random.choice([(1, 1), (2, 2)]),
+                        angle=(0, 360),
+                        sigma=(1, 3),
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            OneOf(
+                [
+                    InkMottlingPost(
+                        ink_mottling_alpha_range=(0.2, 0.3),
+                        ink_mottling_noise_scale_range=(2, 2),
+                        ink_mottling_gaussian_kernel_range=(3, 5),
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+            OneOf(
+                [
+                    Folding(
+                        fold_x=None,
+                        fold_deviation=(0, 0),
+                        fold_count=random.randint(2, 8),
+                        fold_noise=0.01,
+                        fold_angle_range=(0, 0),  # avoid rotation
+                        gradient_width=(0.1, 0.2),
+                        gradient_height=(0.01, 0.02),
+                        backdrop_color=(0, 0, 0),
+                    ),
+                ],
+                p=prob_post * 0.2,
+            ),
+        ]
+        # Keep ink opaque enough to avoid washed-out results; configurable via YAML
+        # Default to "darken" to avoid brightening overlays when paper is white
+        overlay_type = augraphy_cfg.get("overlay_type", "darken")
+        overlay_alpha = float(augraphy_cfg.get("overlay_alpha", 1.0))
+        overlay_alpha = max(0.0, min(1.0, overlay_alpha))
+
+        return AugraphyPipeline(
+            ink_phase=ink_phase,
+            paper_phase=paper_phase,
+            post_phase=post_phase,
+            overlay_type=overlay_type,
+            overlay_alpha=overlay_alpha,
+        )
 
     def sample_scale(self) -> int:
         """Sample a scale from multi_scale_sizes config."""
@@ -42,22 +459,15 @@ class AlbumentationsAugmentor:
             return sizes[0]
         return random.choice(sizes)
 
-    def build_transform(self, batch_scale: int | None = None) -> A.Compose:
-        """Build albumentations transform pipeline for per-image augmentations."""
+    def build_geometric_transform(self) -> A.Compose:
+        """Build geometric transform pipeline (always applied before photometric/Augraphy).
+
+        Includes: resize, perspective, flips, rotation, random crop.
+        These transforms are essential for layout detection and don't conflict with degradation.
+        """
         cfg = self.config
-        resize_size = batch_scale or self.sample_scale()
-        force_square = cfg.get("force_square_resize", False)
-        max_long_side = cfg.get("max_long_side")
 
         transforms: list[A.BasicTransform] = []
-
-        # Resize (per-image operation)
-        if force_square:
-            transforms.append(A.Resize(resize_size, resize_size, p=1.0))
-        else:
-            transforms.append(A.SmallestMaxSize(max_size=resize_size, p=1.0))
-            if max_long_side:
-                transforms.append(A.LongestMaxSize(max_size=max_long_side, p=1.0))
 
         # Perspective transform
         perspective_cfg = cfg.get("perspective", {})
@@ -69,17 +479,6 @@ class AlbumentationsAugmentor:
                         perspective_cfg.get("scale_max", 0.05),
                     ),
                     p=perspective_cfg["probability"],
-                )
-            )
-
-        # Elastic transform
-        elastic_cfg = cfg.get("elastic", {})
-        if elastic_cfg.get("probability", 0) > 0:
-            transforms.append(
-                A.ElasticTransform(
-                    alpha=elastic_cfg.get("alpha", 30),
-                    sigma=elastic_cfg.get("sigma", 5),
-                    p=elastic_cfg["probability"],
                 )
             )
 
@@ -103,58 +502,89 @@ class AlbumentationsAugmentor:
                 )
             )
 
-        # Photometric augmentations
+        return A.Compose(
+            transforms,
+            bbox_params=A.BboxParams(
+                format="coco",
+                label_fields=["category_ids"],
+                min_visibility=0.3,
+            ),
+        )
+
+    def build_photometric_transform(self) -> A.Compose:
+        """Build photometric transform pipeline (mutually exclusive with Augraphy).
+
+        Includes: brightness/contrast, blur, compression, noise, elastic, sobel edge.
+        All effects are always applied when photometric pipeline is chosen.
+        Individual probabilities removed for clarity - use choice_probability to control.
+        """
+        cfg = self.config
+        transforms: list[A.BasicTransform] = []
+
+        # Brightness/contrast (always applied in photometric mode)
         brightness_cfg = cfg.get("brightness_contrast", {})
-        brightness_prob = brightness_cfg.get("probability", 0.5)
-        if brightness_prob > 0:
-            limit = brightness_cfg.get("limit", 0.2)
-            transforms.append(
-                A.RandomBrightnessContrast(
-                    brightness_limit=limit,
-                    contrast_limit=limit,
-                    p=brightness_prob,
-                )
+        limit = brightness_cfg.get("limit", 0.2)
+        transforms.append(
+            A.RandomBrightnessContrast(
+                brightness_limit=limit,
+                contrast_limit=limit,
+                p=0.5,  # 50% chance within photometric pipeline
             )
+        )
 
+        # Blur (motion or Gaussian)
         blur_cfg = cfg.get("blur", {})
-        blur_prob = blur_cfg.get("probability", 0.3)
-        if blur_prob > 0:
-            blur_limit = blur_cfg.get("blur_limit", 3)
-            transforms.append(
-                A.OneOf(
-                    [
-                        A.MotionBlur(blur_limit=blur_limit, p=1.0),
-                        A.GaussianBlur(blur_limit=blur_limit, p=1.0),
-                    ],
-                    p=blur_prob,
-                )
+        blur_limit = blur_cfg.get("blur_limit", 3)
+        transforms.append(
+            A.OneOf(
+                [
+                    A.MotionBlur(blur_limit=blur_limit, p=1.0),
+                    A.GaussianBlur(blur_limit=blur_limit, p=1.0),
+                ],
+                p=0.3,  # 30% chance within photometric pipeline
             )
+        )
 
+        # JPEG compression
         compression_cfg = cfg.get("compression", {})
-        compression_prob = compression_cfg.get("probability", 0.3)
-        if compression_prob > 0:
+        transforms.append(
+            A.ImageCompression(
+                quality_range=(
+                    compression_cfg.get("quality_min", 75),
+                    compression_cfg.get("quality_max", 100),
+                ),
+                p=0.3,  # 30% chance within photometric pipeline
+            )
+        )
+
+        # Gaussian noise
+        noise_cfg = cfg.get("noise", {})
+        transforms.append(
+            A.GaussNoise(
+                std_range=(
+                    noise_cfg.get("std_min", 0.0),
+                    noise_cfg.get("std_max", 0.01),
+                ),
+                p=0.3,  # 30% chance within photometric pipeline
+            )
+        )
+
+        # Elastic transform (distortion effect)
+        elastic_cfg = cfg.get("elastic", {})
+        if elastic_cfg.get("probability", 0) > 0:
             transforms.append(
-                A.ImageCompression(
-                    quality_range=(
-                        compression_cfg.get("quality_min", 75),
-                        compression_cfg.get("quality_max", 100),
-                    ),
-                    p=compression_prob,
+                A.ElasticTransform(
+                    alpha=elastic_cfg.get("alpha", 30),
+                    sigma=elastic_cfg.get("sigma", 5),
+                    p=elastic_cfg["probability"],
                 )
             )
 
-        noise_cfg = cfg.get("noise", {})
-        noise_prob = noise_cfg.get("probability", 0.2)
-        if noise_prob > 0:
-            transforms.append(
-                A.GaussNoise(
-                    std_range=(
-                        noise_cfg.get("std_min", 0.0),
-                        noise_cfg.get("std_max", 0.01),
-                    ),
-                    p=noise_prob,
-                )
-            )
+        # Sobel edge extraction (optional)
+        sobel_cfg = cfg.get("sobel_edge", {})
+        if sobel_cfg.get("enabled", False):
+            blend_alpha = sobel_cfg.get("blend_alpha", 0.2)
+            transforms.append(SobelEdgeExtraction(blend_alpha=blend_alpha, p=0.2))
 
         return A.Compose(
             transforms,
@@ -239,7 +669,12 @@ class AlbumentationsAugmentor:
         if self.current_epoch >= disable_after_epoch:
             mosaic_prob = 0.0
 
-        transform = self.build_transform()
+        # Build transform pipelines
+        photometric_transform = self.build_photometric_transform()
+
+        # Determine if Augraphy is enabled
+        augraphy_enabled = self.augraphy_pipeline is not None
+
         images_out: list[np.ndarray] = []
         annotations_out: list[dict] = []
 
@@ -249,6 +684,18 @@ class AlbumentationsAugmentor:
                 image_np = image
             else:
                 image_np = np.array(image.convert("RGB"))
+
+            # Normalize dtype
+            if image_np.dtype != np.uint8:
+                image_np = (image_np * 255).astype(np.uint8) if image_np.max() <= 1.0 else image_np.astype(np.uint8)
+
+            # Standardize to OpenCV channel order for augmentations (BGR/BGRA)
+            if len(image_np.shape) == 2:
+                image_np = cv2.cvtColor(image_np, cv2.COLOR_GRAY2BGR)
+            elif len(image_np.shape) == 3 and image_np.shape[2] == 3:
+                image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+            elif len(image_np.shape) == 3 and image_np.shape[2] == 4:
+                image_np = cv2.cvtColor(image_np, cv2.COLOR_RGBA2BGRA)
 
             if isinstance(anns, dict):
                 bboxes = anns.get("bbox", [])
@@ -319,14 +766,73 @@ class AlbumentationsAugmentor:
                         # Log the error for debugging
                         pass
 
+            # Compute scale to target short side while capping long side
+            target_short = self.sample_scale()
+            max_long_side = self.config.get("max_long_side")
+            if max_long_side:
+                target_short = min(target_short, max_long_side)
+            h, w = image_np.shape[:2]
+            scale = target_short / float(min(h, w))
+            if max_long_side:
+                scale = min(scale, max_long_side / float(max(h, w)))
+
+            new_h = max(1, int(round(h * scale)))
+            new_w = max(1, int(round(w * scale)))
+
+            # Resize image and boxes
+            image_np = cv2.resize(image_np, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            scaled_boxes = []
+            for bbox in clean_boxes:
+                x, y, bw, bh = bbox
+                scaled_boxes.append([x * scale, y * scale, bw * scale, bh * scale])
+            clean_boxes = scaled_boxes
+
             # Update cache (before per-image transforms)
             if len(self.sample_cache) >= self.cache_size:
                 self.sample_cache.pop(0)
             self.sample_cache.append((image_np.copy(), clean_boxes.copy(), clean_labels.copy()))
 
-            # Apply per-image transforms (albumentations)
+            # Step 1: Apply geometric transforms (always applied)
+            random_crop_cfg = self.config.get("random_crop", {})
+            apply_crop = random_crop_cfg.get("probability", 0) > 0 and random.random() < random_crop_cfg["probability"]
+
+            if apply_crop:
+                area_min = random_crop_cfg.get("area_min", 0.6)
+                area_max = random_crop_cfg.get("area_max", 0.95)
+                target_h, target_w = image_np.shape[:2]
+                crop_transform = A.Compose(
+                    [
+                        A.RandomResizedCrop(
+                            size=(target_h, target_w),
+                            scale=(area_min, area_max),
+                            ratio=(0.75, 1.33),
+                            p=1.0,
+                        )
+                    ],
+                    bbox_params=A.BboxParams(
+                        format="coco",
+                        label_fields=["category_ids"],
+                        min_visibility=0.3,
+                    ),
+                )
+                # Build geometric transform without crop
+                geometric_transform = self.build_geometric_transform()
+            else:
+                crop_transform = None
+                geometric_transform = self.build_geometric_transform()
             try:
-                augmented = transform(
+                # Apply crop first if enabled
+                if crop_transform:
+                    cropped = crop_transform(
+                        image=image_np,
+                        bboxes=clean_boxes,
+                        category_ids=clean_labels,
+                    )
+                    image_np = cropped["image"]
+                    clean_boxes = cropped["bboxes"]
+                    clean_labels = cropped["category_ids"]
+
+                augmented = geometric_transform(
                     image=image_np,
                     bboxes=clean_boxes,
                     category_ids=clean_labels,
@@ -349,14 +855,63 @@ class AlbumentationsAugmentor:
                         width = max(1.0, min(float(w - x_min), width))
                         height = max(1.0, min(float(h - y_min), height))
                         clamped.append([x_min, y_min, width, height])
+                    geometric_transform = self.build_geometric_transform()
                     try:
-                        augmented = transform(
+                        augmented = geometric_transform(
                             image=image_np,
                             bboxes=clamped,
                             category_ids=clean_labels,
                         )
                     except ValueError:
                         augmented["bboxes"] = clamped
+
+            # Step 2: Choose EITHER photometric Albumentations OR Augraphy (mutually exclusive)
+            # This prevents compound effects from both degradation pipelines
+            if augraphy_enabled:
+                # Configurable choice: photometric augmentations OR Augraphy
+                # Get augraphy_choice_probability from config (default 0.5 = 50/50)
+                augraphy_choice_prob = self.config.get("augraphy", {}).get("choice_probability", 0.5)
+                use_augraphy = random.random() < augraphy_choice_prob
+
+                # IMPORTANT: Skip Augraphy if all phase probabilities are 0.0
+                # Augraphy applies ink-to-paper merging even with empty phases, causing unwanted brightness/color shifts
+                if use_augraphy:
+                    augraphy_cfg = self.config.get("augraphy", {})
+                    prob_ink = augraphy_cfg.get("ink_probability", 0.5)
+                    prob_paper = augraphy_cfg.get("paper_probability", 0.5)
+                    prob_post = augraphy_cfg.get("post_probability", 0.5)
+
+                    # If all phase probabilities are 0, skip Augraphy (fallback to photometric)
+                    if prob_ink == 0.0 and prob_paper == 0.0 and prob_post == 0.0:
+                        use_augraphy = False
+
+                if use_augraphy:
+                    # Apply Augraphy (document-specific degradations)
+                    augmented["image"] = self.augraphy_pipeline(augmented["image"])
+                else:
+                    # Apply photometric Albumentations (brightness, blur, noise, etc.)
+                    try:
+                        photometric_result = photometric_transform(
+                            image=augmented["image"],
+                            bboxes=augmented["bboxes"],
+                            category_ids=augmented["category_ids"],
+                        )
+                        augmented["image"] = photometric_result["image"]
+                    except ValueError:
+                        # If photometric fails, keep geometric-only result
+                        pass
+            else:
+                # If Augraphy not enabled, always apply photometric Albumentations
+                try:
+                    photometric_result = photometric_transform(
+                        image=augmented["image"],
+                        bboxes=augmented["bboxes"],
+                        category_ids=augmented["category_ids"],
+                    )
+                    augmented["image"] = photometric_result["image"]
+                except ValueError:
+                    # If photometric fails, keep geometric-only result
+                    pass
 
             # Prepare output annotations
             new_anns = {
@@ -375,6 +930,19 @@ class AlbumentationsAugmentor:
             images_out.append(augmented["image"])
             annotations_out.append(new_anns)
 
+        # Convert outputs back to RGB/RGBA for downstream consumers and visualization
+        rgb_images_out: list[np.ndarray] = []
+        for img in images_out:
+            if len(img.shape) == 2:
+                rgb_images_out.append(cv2.cvtColor(img, cv2.COLOR_GRAY2RGB))
+            elif len(img.shape) == 3 and img.shape[2] == 3:
+                rgb_images_out.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            elif len(img.shape) == 3 and img.shape[2] == 4:
+                rgb_images_out.append(cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA))
+            else:
+                rgb_images_out.append(img)
+
+        images_out = rgb_images_out
         examples["image"] = images_out
         examples["annotations"] = annotations_out
         return examples

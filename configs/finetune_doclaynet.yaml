@@ -52,10 +52,6 @@ augmentation:
     probability: 0.3  # Enabled for fine-tuning (more aggressive)
     scale_min: 0.02
     scale_max: 0.05
-  elastic:
-    probability: 0.2  # Enabled for fine-tuning (simulates jitter/distortion)
-    alpha: 30
-    sigma: 5
 
   # Photometric augmentations (aligned with DocLayout-YOLO)
   brightness_contrast:
@@ -72,6 +68,10 @@ augmentation:
     probability: 0.3  # Increased to match DocLayout-YOLO's Gaussian noise
     std_min: 0.0
     std_max: 0.01
+  elastic:
+    probability: 0.2  # Enabled for fine-tuning (simulates jitter/distortion)
+    alpha: 30
+    sigma: 5
 
 training:
   # Fine-tuning schedule
