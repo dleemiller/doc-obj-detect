@@ -712,9 +712,9 @@ def run_multiscale_analysis(
         f.write("-" * 80 + "\n")
         for i, m in enumerate(sorted(metrics_list, key=lambda x: x.score, reverse=True)[:3], 1):
             f.write(f"{i}. {m.policy_name} (score: {m.score:.4f})\n")
-            f.write(f"   - Good coverage: {100*m.frac_good:.1f}%\n")
-            f.write(f"   - Tiny boxes: {100*m.frac_tiny:.1f}%\n")
-            f.write(f"   - Huge boxes: {100*m.frac_huge:.1f}%\n")
+            f.write(f"   - Good coverage: {100 * m.frac_good:.1f}%\n")
+            f.write(f"   - Tiny boxes: {100 * m.frac_tiny:.1f}%\n")
+            f.write(f"   - Huge boxes: {100 * m.frac_huge:.1f}%\n")
             f.write(
                 f"   - Stride distribution: S8={m.stride8_pct:.1f}%, S16={m.stride16_pct:.1f}%, S32={m.stride32_pct:.1f}%\n"
             )
@@ -731,7 +731,7 @@ def run_multiscale_analysis(
             f.write(f"Current policy (AR-640) score: {ar640_metrics.score:.4f}\n")
             f.write(f"Recommended policy score: {best_policy.score:.4f}\n")
             f.write(
-                f"Score improvement: {score_diff:+.4f} ({100*score_diff/abs(ar640_metrics.score):+.1f}%)\n\n"
+                f"Score improvement: {score_diff:+.4f} ({100 * score_diff / abs(ar640_metrics.score):+.1f}%)\n\n"
             )
 
         f.write("KEY INSIGHTS:\n")
@@ -762,7 +762,7 @@ def run_multiscale_analysis(
         worst_tiny = max(metrics_list, key=lambda m: m.frac_tiny)
         if worst_tiny.frac_tiny > 0.1:
             f.write(
-                f"- {worst_tiny.policy_name} has {100*worst_tiny.frac_tiny:.1f}% tiny boxes (<3 cells on all strides)\n"
+                f"- {worst_tiny.policy_name} has {100 * worst_tiny.frac_tiny:.1f}% tiny boxes (<3 cells on all strides)\n"
             )
             f.write("  Consider avoiding small scales for this dataset\n")
 

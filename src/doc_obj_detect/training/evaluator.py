@@ -91,7 +91,7 @@ class EvaluatorRunner:
     def _build_eval_size(self) -> dict[str, int]:
         # Determine base size
         if self._aug_config and self._aug_config.get("multi_scale_sizes"):
-            eval_short_side = 640  #max(self._aug_config["multi_scale_sizes"])
+            eval_short_side = 640  # max(self._aug_config["multi_scale_sizes"])
         else:
             eval_short_side = self.config.data.image_size
 

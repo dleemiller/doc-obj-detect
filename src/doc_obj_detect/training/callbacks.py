@@ -199,7 +199,7 @@ class ModelEMA:
 
         # Identify which keys to keep
         keys_to_remove = set()
-        for ptr, keys in ptr_to_keys.items():
+        for _, keys in ptr_to_keys.items():
             if len(keys) > 1:
                 # Multiple keys share memory - keep the shortest/cleanest one
                 # Prefer unprefixed keys (e.g., 'class_embed.*') over prefixed ('model.decoder.class_embed.*')
@@ -227,7 +227,9 @@ class ModelEMA:
         # Load with strict=False to allow missing alias keys
         # The deduplicated state may only have shorter keys (class_embed.*)
         # but the model has both short and long keys (model.decoder.class_embed.*) as aliases
-        missing_keys, unexpected_keys = self.module.load_state_dict(state_dict["module"], strict=False)
+        missing_keys, unexpected_keys = self.module.load_state_dict(
+            state_dict["module"], strict=False
+        )
 
         # Filter out expected missing keys (decoder head aliases)
         # These are prefixed versions of keys that exist in unprefixed form
@@ -332,9 +334,9 @@ class EMACallback(TrainerCallback):
         checkpoint_to_load = None
 
         # Try to get checkpoint from TrainingArguments
-        if hasattr(args, '_checkpoint_for_ema'):
+        if hasattr(args, "_checkpoint_for_ema"):
             checkpoint_to_load = args._checkpoint_for_ema
-        elif hasattr(args, 'resume_from_checkpoint') and args.resume_from_checkpoint:
+        elif hasattr(args, "resume_from_checkpoint") and args.resume_from_checkpoint:
             checkpoint_to_load = args.resume_from_checkpoint
 
         if checkpoint_to_load:
@@ -353,9 +355,7 @@ class EMACallback(TrainerCallback):
                     )
                     ema_state_loaded = True
                 except Exception as e:
-                    logger.warning(
-                        "[EMA] Failed to load EMA state from %s: %s", ema_path, e
-                    )
+                    logger.warning("[EMA] Failed to load EMA state from %s: %s", ema_path, e)
 
         # Fallback: if no specific checkpoint, try to find the most recent one in output_dir
         if not ema_state_loaded and args.output_dir:

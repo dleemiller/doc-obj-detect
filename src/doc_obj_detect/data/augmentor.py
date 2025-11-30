@@ -16,13 +16,37 @@ from typing import Any
 import albumentations as A
 import cv2
 import numpy as np
-
-from augraphy import *
-try:
-    from augraphy import AugraphyPipeline
-    AUGRAPHY_AVAILABLE = True
-except ImportError:
-    AUGRAPHY_AVAILABLE = False
+from augraphy import (
+    AugraphyPipeline,
+    BindingsAndFasteners,
+    Brightness,
+    BrightnessTexturize,
+    ColorPaper,
+    ColorShift,
+    DirtyRollers,
+    Dithering,
+    DotMatrix,
+    DoubleExposure,
+    Faxify,
+    Folding,
+    Gamma,
+    GlitchEffect,
+    InkBleed,
+    InkColorSwap,
+    InkMottling,
+    Jpeg,
+    LinesDegradation,
+    LowInkPeriodicLines,
+    LowInkRandomLines,
+    NoiseTexturize,
+    NoisyLines,
+    OneOf,
+    PatternGenerator,
+    ShadowCast,
+    Squish,
+    SubtleNoise,
+    WaterMark,
+)
 
 
 class SobelEdgeExtraction(A.ImageOnlyTransform):
@@ -62,11 +86,7 @@ class SobelEdgeExtraction(A.ImageOnlyTransform):
         edge_rgb = cv2.cvtColor(magnitude, cv2.COLOR_GRAY2BGR)
 
         # Blend edge map with original image
-        blended = cv2.addWeighted(
-            img, 1.0 - self.blend_alpha,
-            edge_rgb, self.blend_alpha,
-            0
-        )
+        blended = cv2.addWeighted(img, 1.0 - self.blend_alpha, edge_rgb, self.blend_alpha, 0)
 
         return blended
 
@@ -90,11 +110,6 @@ class AlbumentationsAugmentor:
         self.augraphy_pipeline = None
         augraphy_cfg = self.config.get("augraphy", {})
         if augraphy_cfg.get("enabled", False):
-            if not AUGRAPHY_AVAILABLE:
-                raise ImportError(
-                    "Augraphy is enabled in config but not installed. "
-                    "Install it with: uv add augraphy"
-                )
             self.augraphy_pipeline = self._build_augraphy_pipeline(augraphy_cfg)
 
     def set_epoch(self, epoch: int) -> None:
@@ -111,40 +126,7 @@ class AlbumentationsAugmentor:
         - Printing defects
         - Document aging effects
         """
-        from augraphy import (
-            AugraphyPipeline,
-            BindingsAndFasteners,
-            Brightness,
-            BrightnessTexturize,
-            ColorPaper,
-            ColorShift,
-            DotMatrix,
-            Dithering,
-            DirtyRollers,
-            DoubleExposure,
-            Faxify,
-            GlitchEffect,
-            Gamma,
-            InkBleed,
-            InkColorSwap,
-            InkMottling,
-            InkMottling as InkMottlingPost,
-            Jpeg,
-            LinesDegradation,
-            LowInkPeriodicLines,
-            LowInkRandomLines,
-            Markup,
-            OneOf,
-            PatternGenerator,
-            Scribbles,
-            SectionShift,
-            ShadowCast,
-            Squish,
-            SubtleNoise,
-            NoisyLines,
-            NoiseTexturize,
-            WaterMark,
-        )
+        from augraphy import InkMottling as InkMottlingPost
 
         # Per-phase probabilities (allow fine-grained control)
         # Use per-phase probabilities if specified, otherwise fall back to global probability
@@ -687,7 +669,11 @@ class AlbumentationsAugmentor:
 
             # Normalize dtype
             if image_np.dtype != np.uint8:
-                image_np = (image_np * 255).astype(np.uint8) if image_np.max() <= 1.0 else image_np.astype(np.uint8)
+                image_np = (
+                    (image_np * 255).astype(np.uint8)
+                    if image_np.max() <= 1.0
+                    else image_np.astype(np.uint8)
+                )
 
             # Standardize to OpenCV channel order for augmentations (BGR/BGRA)
             if len(image_np.shape) == 2:
@@ -794,7 +780,10 @@ class AlbumentationsAugmentor:
 
             # Step 1: Apply geometric transforms (always applied)
             random_crop_cfg = self.config.get("random_crop", {})
-            apply_crop = random_crop_cfg.get("probability", 0) > 0 and random.random() < random_crop_cfg["probability"]
+            apply_crop = (
+                random_crop_cfg.get("probability", 0) > 0
+                and random.random() < random_crop_cfg["probability"]
+            )
 
             if apply_crop:
                 area_min = random_crop_cfg.get("area_min", 0.6)
@@ -870,7 +859,9 @@ class AlbumentationsAugmentor:
             if augraphy_enabled:
                 # Configurable choice: photometric augmentations OR Augraphy
                 # Get augraphy_choice_probability from config (default 0.5 = 50/50)
-                augraphy_choice_prob = self.config.get("augraphy", {}).get("choice_probability", 0.5)
+                augraphy_choice_prob = self.config.get("augraphy", {}).get(
+                    "choice_probability", 0.5
+                )
                 use_augraphy = random.random() < augraphy_choice_prob
 
                 # IMPORTANT: Skip Augraphy if all phase probabilities are 0.0

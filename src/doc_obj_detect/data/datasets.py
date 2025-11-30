@@ -6,8 +6,6 @@ from datasets import load_dataset
 
 from doc_obj_detect.data.constants import (
     DOCLAYNET_CLASSES,
-    DOCSYNTH_DEFAULT_CLASS,
-    DOCSYNTH_TO_PUBLAYNET_MAPPING,
     PUBLAYNET_CLASSES,
 )
 

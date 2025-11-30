@@ -145,14 +145,22 @@ def _deduplicate_keys(state_dict: dict) -> dict:
     # Then, add prefixed keys only if non-prefixed version doesn't exist
     for key in keys_with_prefix:
         # Try to match against model.decoder.X pattern
-        short_key = key.replace("model.decoder.", "", 1) if key.startswith("model.decoder.") else key.replace("model.", "", 1)
+        short_key = (
+            key.replace("model.decoder.", "", 1)
+            if key.startswith("model.decoder.")
+            else key.replace("model.", "", 1)
+        )
         if short_key not in new_state_dict:
             # No unprefixed version exists, keep the prefixed one
             new_state_dict[key] = state_dict[key].clone()
 
     duplicates_removed = len(state_dict) - len(new_state_dict)
     if duplicates_removed > 0:
-        logger.info("Removed %d duplicate keys (shared memory), cloned %d tensors", duplicates_removed, len(new_state_dict))
+        logger.info(
+            "Removed %d duplicate keys (shared memory), cloned %d tensors",
+            duplicates_removed,
+            len(new_state_dict),
+        )
 
     return new_state_dict
 

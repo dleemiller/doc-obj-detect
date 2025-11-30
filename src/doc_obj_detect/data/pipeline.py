@@ -146,7 +146,9 @@ class DatasetFactory:
             annotations = []
             # Handle DocSynth format (oriented bounding boxes)
             if dataset_type == "docsynth":
-                for idx, (img, anno_list) in enumerate(zip(images, examples["anno_string"], strict=False)):
+                for idx, (img, anno_list) in enumerate(
+                    zip(images, examples["anno_string"], strict=False)
+                ):
                     img_width, img_height = img.size
                     anns_list = []
 
