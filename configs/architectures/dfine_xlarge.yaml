@@ -18,7 +18,7 @@ num_queries: 300
 decoder_layers: 6
 decoder_ffn_dim: 1024
 decoder_attention_heads: 8
-decoder_n_points: [6, 6, 3]  # Sampling points per level: [S:stride8, M:stride16, L:stride32]
+decoder_n_points: [4, 6, 4]  # Sampling points per level: [S:stride8, M:stride16, L:stride32]
 decoder_activation_function: "silu"
 
 # Distribution refinement parameters
@@ -36,12 +36,12 @@ with_box_refine: true
 encode_proj_layers: [2]
 layer_scale: 1
 
-# Loss weights (D-FINE standard)
+# Loss weights (Optimized for document object detection)
 weight_loss_vfl: 1.0      # Varifocal loss
-weight_loss_bbox: 5.0     # L1 bbox loss
+weight_loss_bbox: 10.0    # L1 bbox loss (increased from 5.0 for precise text box localization)
 weight_loss_giou: 2.0     # GIoU loss
 weight_loss_fgl: 0.15     # Fine-grained localization
-weight_loss_ddf: 1.5      # Distribution distillation
+weight_loss_ddf: 2.0      # Distribution distillation (increased from 1.5 for better refinement)
 
 # Hungarian matcher costs
 matcher_class_cost: 2.0
@@ -55,3 +55,6 @@ num_denoising: 100
 label_noise_ratio: 0.5
 box_noise_scale: 1.0
 auxiliary_loss: true
+
+# custom
+learn_initial_query: false

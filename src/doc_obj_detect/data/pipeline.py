@@ -12,7 +12,11 @@ from PIL import Image
 from transformers import AutoImageProcessor
 
 from doc_obj_detect.data.augmentor import AlbumentationsAugmentor
-from doc_obj_detect.data.constants import PUBLAYNET_ID_MAPPING
+from doc_obj_detect.data.constants import (
+    DOCSYNTH_DEFAULT_CLASS,
+    DOCSYNTH_TO_PUBLAYNET_MAPPING,
+    PUBLAYNET_ID_MAPPING,
+)
 from doc_obj_detect.data.datasets import DatasetLoader
 
 
@@ -48,9 +52,11 @@ class DatasetFactory:
 
     def _load_split(self, split: str):
         if self.dataset_name == "publaynet":
-            return DatasetLoader.load_publaynet(split, self.cache_dir), True
+            return DatasetLoader.load_publaynet(split, self.cache_dir), "publaynet"
         if self.dataset_name == "doclaynet":
-            return DatasetLoader.load_doclaynet(split, self.cache_dir), False
+            return DatasetLoader.load_doclaynet(split, self.cache_dir), "doclaynet"
+        if self.dataset_name == "docsynth":
+            return DatasetLoader.load_docsynth(split, self.cache_dir), "docsynth"
         raise ValueError(f"Unknown dataset: {self.dataset_name}")
 
     def build(
@@ -59,13 +65,13 @@ class DatasetFactory:
         max_samples: int | None = None,
         apply_augmentation: bool = False,
     ) -> tuple[object, dict[int, str]]:
-        (dataset, class_labels), is_publaynet = self._load_split(split)
+        (dataset, class_labels), dataset_type = self._load_split(split)
         if max_samples is not None:
             max_idx = min(max_samples, len(dataset))
             dataset = dataset.select(range(max_idx))
 
         augment = self.augmentor.augment if (apply_augmentation and self.augmentor) else None
-        preprocess = self._build_preprocessor(is_publaynet)
+        preprocess = self._build_preprocessor(dataset_type)
 
         def transform_fn(examples: dict) -> dict:
             batch = augment(examples) if augment else examples
@@ -74,7 +80,7 @@ class DatasetFactory:
         dataset = dataset.with_transform(transform_fn)
         return dataset, class_labels
 
-    def _build_preprocessor(self, is_publaynet: bool) -> Callable[[dict], dict]:
+    def _build_preprocessor(self, dataset_type: str) -> Callable[[dict], dict]:
         processor = self.image_processor
 
         def infer_resized_shape(height: int, width: int, size_dict: dict) -> tuple[int, int]:
@@ -105,18 +111,76 @@ class DatasetFactory:
                 )
             return height, width
 
+        def obb_to_bbox(corners: list[float], img_width: int, img_height: int) -> list[float]:
+            """Convert oriented bounding box (4 corners) to axis-aligned bbox (x, y, w, h)."""
+            # corners format: [x1, y1, x2, y2, x3, y3, x4, y4] (normalized 0-1)
+            # Extract all x and y coordinates
+            x_coords = [corners[i] * img_width for i in range(0, 8, 2)]
+            y_coords = [corners[i] * img_height for i in range(1, 8, 2)]
+
+            # Find bounding box
+            x_min, x_max = min(x_coords), max(x_coords)
+            y_min, y_max = min(y_coords), max(y_coords)
+
+            # Convert to COCO format (x, y, width, height)
+            return [x_min, y_min, x_max - x_min, y_max - y_min]
+
         def preprocess_batch(examples: dict) -> dict:
-            images = []
-            for img in examples["image"]:
-                if isinstance(img, np.ndarray):
-                    if img.dtype != np.uint8:
-                        img = np.clip(img, 0, 255).astype(np.uint8)
-                    img = Image.fromarray(img)
-                images.append(img.convert("RGB"))
+            # Handle DocSynth format (image_data bytes instead of image)
+            if dataset_type == "docsynth":
+                import io
+
+                images = []
+                for img_data in examples["image_data"]:
+                    img = Image.open(io.BytesIO(img_data))
+                    images.append(img.convert("RGB"))
+            else:
+                images = []
+                for img in examples["image"]:
+                    if isinstance(img, np.ndarray):
+                        if img.dtype != np.uint8:
+                            img = np.clip(img, 0, 255).astype(np.uint8)
+                        img = Image.fromarray(img)
+                    images.append(img.convert("RGB"))
 
             annotations = []
+            # Handle DocSynth format (oriented bounding boxes)
+            if dataset_type == "docsynth":
+                for idx, (img, anno_list) in enumerate(
+                    zip(images, examples["anno_string"], strict=False)
+                ):
+                    img_width, img_height = img.size
+                    anns_list = []
+
+                    for anno_str in anno_list:
+                        parts = anno_str.split()
+                        if len(parts) != 9:  # class_id + 8 coordinates
+                            continue
+
+                        # Parse class ID and map to PubLayNet
+                        docsynth_class = int(parts[0])
+                        publaynet_class = DOCSYNTH_TO_PUBLAYNET_MAPPING.get(
+                            docsynth_class, DOCSYNTH_DEFAULT_CLASS
+                        )
+
+                        # Convert OBB corners to axis-aligned bbox
+                        corners = [float(p) for p in parts[1:]]
+                        bbox = obb_to_bbox(corners, img_width, img_height)
+                        area = bbox[2] * bbox[3]
+
+                        anns_list.append(
+                            {
+                                "bbox": bbox,
+                                "category_id": publaynet_class,
+                                "area": area,
+                                "iscrowd": 0,
+                            }
+                        )
+
+                    annotations.append({"image_id": idx, "annotations": anns_list})
+
             # Handle both COCO format (publaynet) and flat format (doclaynet-v1.1)
-            if "annotations" in examples:
+            elif "annotations" in examples:
                 # COCO format: examples["annotations"] is a list of dicts
                 for img_id, anns_dict in zip(
                     examples["image_id"], examples["annotations"], strict=False
@@ -130,7 +194,9 @@ class DatasetFactory:
                         strict=False,
                     ):
                         model_cat_id = (
-                            PUBLAYNET_ID_MAPPING.get(cat_id, cat_id - 1) if is_publaynet else cat_id
+                            PUBLAYNET_ID_MAPPING.get(cat_id, cat_id - 1)
+                            if dataset_type == "publaynet"
+                            else cat_id
                         )
                         anns_list.append(
                             {

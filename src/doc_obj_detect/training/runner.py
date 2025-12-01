@@ -58,7 +58,9 @@ class TrainerRunner(BaseRunner):
             load_weights_from=load_weights_from, prefer_ema=prefer_ema
         )
         train_dataset, val_dataset, class_labels = self._build_datasets(processors)
-        training_args, callbacks, run_paths = self._build_training_args(model)
+        training_args, callbacks, run_paths = self._build_training_args(
+            model, checkpoint_for_ema=load_weights_from or resume_from_checkpoint
+        )
 
         compute_metrics_fn = self._build_metrics_fn(processors.eval, class_labels)
 
@@ -189,7 +191,9 @@ class TrainerRunner(BaseRunner):
         logger.info("Classes: %s", class_labels)
         return train_dataset, val_dataset, class_labels
 
-    def _build_training_args(self, model) -> tuple[TrainingArguments, list, RunPaths]:
+    def _build_training_args(
+        self, model, checkpoint_for_ema=None
+    ) -> tuple[TrainingArguments, list, RunPaths]:
         paths = self._prepare_run_paths()
         training_config_dict = self.config.training.model_dump()
 
@@ -213,6 +217,10 @@ class TrainerRunner(BaseRunner):
             per_device_eval_batch_size=self.config.data.batch_size,
             **training_config_dict,
         )
+
+        # Store checkpoint path for EMA callback to use
+        if checkpoint_for_ema:
+            training_args._checkpoint_for_ema = str(checkpoint_for_ema)
 
         callbacks = []
         if early_stopping_patience is not None:

@@ -3,11 +3,11 @@
 
 model:
   backbone: "convnext_large.dinov3_lvd1689m"  # ConvNeXt-Large DINOv3 (~200M params)
-  architecture: dfine_xlarge  # D-FINE XLarge architecture (see configs/architectures/dfine_xlarge.yaml)
+  architecture: "dfine_xlarge"  # D-FINE XLarge architecture (see configs/architectures/dfine_xlarge.yaml)
   num_classes: 5  # PubLayNet: text, title, list, table, figure
   use_pretrained_backbone: true  # Keep ConvNeXt-DINOv3 weights (1.7B images, SOTA features)
   freeze_backbone: true  # Let the decoder stabilize against frozen ConvNeXt features
-  freeze_backbone_epochs: 2  # Unfreeze after 2 epochs for full end-to-end training
+  freeze_backbone_epochs: 50  # Unfreeze after 2 epochs for full end-to-end training
 
 dfine:
   # Backbone-specific configuration (depends on chosen backbone)
@@ -27,57 +27,75 @@ data:
   train_split: "train"
   val_split: "validation"  # PubLayNet uses 'validation' not 'val'
   image_size: 640  # Standard document detection size
-  batch_size: 16  # Trimmed from the 32-image D-FINE recipe to leave VRAM for the C2 feature map
+  batch_size: 64  # Trimmed from the 32-image D-FINE recipe to leave VRAM for the C2 feature map
   max_eval_samples: 1000
-  num_workers: 4  # Reduced to avoid "too many open files"
+  num_workers: 6  # Optimized for data loading (max per RAM constraints)
+  pin_memory: true  # Faster GPU transfer
+  prefetch_factor: 3  # Increased to improve GPU utilization
+  persistent_workers: true  # Keep workers alive between epochs for better throughput
 
 augmentation:
   # Multi-scale training for better scale invariance and small object detection
-  multi_scale_sizes: [576, 608, 640]
-  max_long_side: 928
+  multi_scale_sizes: [576, 608, 640, 672]
+  max_long_side: 1024
 
   # Flip augmentations (essential for layout detection - ICDAR 2023 & DocLayout-YOLO)
   horizontal_flip: 0.5  # Standard horizontal flip (matches papers)
   vertical_flip: 0.5   # Increased to match DocLayout-YOLO (handles varied text orientations)
 
-  # Random cropping (DocLayout-YOLO: 0.7 probability, area 0.5-0.9)
+  # Random cropping - ENABLED (DocLayout-YOLO's highest probability augmentation)
   random_crop:
-    probability: 0.7  # High probability for local feature learning
-    area_min: 0.5     # Minimum crop area as fraction of original
-    area_max: 0.9     # Maximum crop area
+    probability: 0.5  # Enabled per DocLayout-YOLO research (highest impact augmentation)
+    area_min: 0.6     # Keep 50-90% of page (preserves significant context)
+    area_max: 0.95     # Forces model to detect objects at varying spatial scales
 
-  # Mosaic augmentation (used by ICDAR 2023 winners)
+  # Mosaic augmentation - DISABLED (breaks document layout coherence per YOLO11-OBB study)
   mosaic:
-    probability: 0.5  # Increased to match ICDAR baseline and square640 config
-    disable_after_epoch: 10  # Disable after epoch 10 like 2nd place team
+    probability: 0.0  # Disabled - research shows mosaic harmful for document object detection
+    disable_after_epoch: 6  # (inactive)
 
-  # Geometric augmentations
-  rotate_limit: 5  # ICDAR winners used 5°
-  rotate_prob: 0.5  # 50% probability
+  # Geometric augmentations - ROTATION DISABLED (visual inspection confirmed bbox misalignment)
+  rotate_limit: 1  # DISABLED - even ±2° causes bbox/content misalignment with axis-aligned boxes
+  rotate_prob: 0.0  # DISABLED - would harm training quality with incorrect labels
   perspective:
     probability: 0.0  # Disabled for pretraining (conservative approach)
     scale_min: 0.02
     scale_max: 0.05
+
+  # Photometric augmentation settings (applied when photometric is chosen vs Augraphy)
+  # Individual probabilities hardcoded in code for simplicity (brightness: 0.5, blur/compression/noise: 0.3)
+  # To control overall photometric vs Augraphy split, use augraphy.choice_probability below
+  brightness_contrast:
+    limit: 0.15  # ±20% brightness/contrast variation
+  blur:
+    blur_limit: 2  # Max blur kernel size
+  compression:
+    quality_min: 75  # JPEG quality range
+    quality_max: 100
+  noise:
+    std_min: 0.0  # Gaussian noise standard deviation
+    std_max: 0.01
   elastic:
-    probability: 0.0  # Disabled for pretraining (conservative approach)
+    probability: 0.2
     alpha: 30
     sigma: 5
 
-  # Photometric augmentations (aligned with DocLayout-YOLO)
-  brightness_contrast:
-    limit: 0.2
-    probability: 0.5  # Matches DocLayout-YOLO
-  blur:
-    probability: 0.3  # Increased for better robustness (simulates resolution issues)
-    blur_limit: 3
-  compression:
-    probability: 0.3  # Increased for JPEG artifact robustness
-    quality_min: 75
-    quality_max: 100
-  noise:
-    probability: 0.3  # Increased to match DocLayout-YOLO's Gaussian noise
-    std_min: 0.0
-    std_max: 0.01
+  # Sobel edge extraction (optional - disabled by default)
+  sobel_edge:
+    enabled: false  # Set to true to enable edge enhancement
+    blend_alpha: 0.2  # 20% edge, 80% original (if enabled)
+
+  # Augraphy: Realistic document degradation (paper texture, ink effects, scanning artifacts)
+  augraphy:
+    enabled: true
+
+    # DEGRADATION CHOICE (photometric OR Augraphy - mutually exclusive)
+    choice_probability: 0.5   # 0.5 = 50% use Augraphy, 50% use photometric
+
+    # Per-phase probabilities (control Augraphy's internal OneOf groups)
+    ink_probability: 0.5      # Ink phase: InkBleed OR InkMottling OR InkColorSwap
+    paper_probability: 0.5    # Paper phase: ColorPaper OR BrightnessTexturize + artifacts
+    post_probability: 0.5     # Post phase: Brightness OR Gamma OR Faxify (prevents stacking)
 
 training:
   # Training schedule: 12 epochs to match SOTA paper
@@ -85,7 +103,7 @@ training:
   num_train_epochs: 12
 
   # Learning rates follow the D-FINE schedule scaled to batch_size=16 (base 2.5e-4 → 1.25e-4)
-  learning_rate: 1.25e-4  # Head LR after linear scaling from the 32-image reference run
+  learning_rate: 2.5e-4  # Head LR after linear scaling from the 32-image reference run
   backbone_lr_multiplier: 0.01  # Backbone LR = 1% of head LR (1.25e-6) to preserve DINOv3 features
 
   # Optimizer settings
@@ -96,13 +114,13 @@ training:
   lr_scheduler_type: "cosine_with_min_lr"
   warmup_ratio: 0.08  # 8% of total training (was 5000 steps, too long for rapid convergence)
   lr_scheduler_kwargs:
-    min_lr: 1.25e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
+    min_lr: 2.5e-5  # Min LR = base_lr / 10 (precision tail for final mAP gains)
 
   # Gradient settings
   gradient_accumulation_steps: 1
   max_grad_norm: 0.1  # D-FINE standard (global fallback, not used when separate norms specified)
-  backbone_max_grad_norm: 0.1  # Separate clipping prevents starvation; LR multiplier (0.01) controls update magnitude
-  head_max_grad_norm: 0.1  # D-FINE standard for encoder/decoder/detection head
+    #backbone_max_grad_norm: 0.1  # Separate clipping prevents starvation; LR multiplier (0.01) controls update magnitude
+    #head_max_grad_norm: 0.1  # D-FINE standard for encoder/decoder/detection head
 
   # Mixed precision
   bf16: true

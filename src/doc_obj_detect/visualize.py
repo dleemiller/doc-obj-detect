@@ -4,7 +4,9 @@ import argparse
 import logging
 from pathlib import Path
 
+import cv2
 import numpy as np
+import yaml
 from PIL import Image, ImageDraw, ImageFont
 
 from doc_obj_detect.config import AugmentationConfig
@@ -32,9 +34,21 @@ def visualize_augmentations(
     num_samples: int = 4,
     output_dir: str = "outputs/augmentation_samples",
     cache_dir: str | None = None,
+    mode: str = "simple",
+    config_path: str | None = None,
 ) -> None:
-    """Generate side-by-side original vs augmented document samples."""
+    """Generate augmentation visualization samples.
 
+    Args:
+        dataset_name: Dataset to use ('publaynet' or 'doclaynet')
+        num_samples: Number of samples to generate
+        output_dir: Directory to save visualizations
+        cache_dir: Optional cache directory for datasets
+        mode: Visualization mode:
+            - 'simple': Original vs augmented (default)
+            - 'comparison': Original vs photometric vs augraphy (3-way comparison)
+        config_path: Path to config YAML for augmentation settings (optional)
+    """
     dataset_name = dataset_name.lower()
     if dataset_name == "publaynet":
         dataset, class_labels = DatasetLoader.load_publaynet("val", cache_dir)
@@ -46,12 +60,36 @@ def visualize_augmentations(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Single-scale transform for clarity
-    aug_config = AugmentationConfig(multi_scale_sizes=[512]).model_dump()
+    if mode == "simple":
+        _visualize_simple(dataset, class_labels, num_samples, output_path, config_path)
+    elif mode == "comparison":
+        _visualize_comparison(dataset, class_labels, num_samples, output_path, config_path)
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Choose 'simple' or 'comparison'")
+
+    logger.info("Samples saved to %s", output_path)
+
+
+def _visualize_simple(
+    dataset,
+    class_labels: dict[int, str],
+    num_samples: int,
+    output_path: Path,
+    config_path: str | None,
+) -> None:
+    """Generate simple original vs augmented comparisons."""
+    # Load config if provided, otherwise use defaults
+    if config_path:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        aug_config = config.get("augmentation", {})
+    else:
+        aug_config = AugmentationConfig(multi_scale_sizes=[512]).model_dump()
+
     augmentor = AlbumentationsAugmentor(aug_config)
     transform = augmentor.build_transform(batch_scale=512)
 
-    logger.info("Generating %s augmentation samples...", num_samples)
+    logger.info("Generating %s augmentation samples (simple mode)...", num_samples)
     for idx in range(num_samples):
         sample = dataset[idx]
         image = sample["image"]
@@ -80,7 +118,123 @@ def visualize_augmentations(
         comparison.save(output_file)
         logger.info("Saved: %s", output_file)
 
-    logger.info("Samples saved to %s", output_path)
+
+def _visualize_comparison(
+    dataset,
+    class_labels: dict[int, str],
+    num_samples: int,
+    output_path: Path,
+    config_path: str | None,
+) -> None:
+    """Generate 3-way comparison: original, photometric, augraphy."""
+    # Load config
+    if config_path:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        base_aug_config = config.get("augmentation", {})
+    else:
+        # Use default config with augraphy enabled
+        base_aug_config = AugmentationConfig(multi_scale_sizes=[512]).model_dump()
+        base_aug_config["augraphy"] = {"enabled": True}
+
+    # Create two augmentors: photometric vs augraphy
+    aug_config_photometric = base_aug_config.copy()
+    aug_config_photometric["augraphy"] = {
+        "enabled": True,
+        "choice_probability": 0.0,  # Always use photometric
+    }
+
+    aug_config_augraphy = base_aug_config.copy()
+    aug_config_augraphy["augraphy"] = {
+        "enabled": True,
+        "choice_probability": 1.0,  # Always use augraphy
+        "ink_probability": 0.6,
+        "paper_probability": 0.7,
+        "post_probability": 0.5,
+    }
+
+    augmentor_photometric = AlbumentationsAugmentor(aug_config_photometric)
+    augmentor_augraphy = AlbumentationsAugmentor(aug_config_augraphy)
+
+    logger.info("Generating %s augmentation comparisons (photometric vs augraphy)...", num_samples)
+    logger.info("  1. Original image (with bboxes)")
+    logger.info("  2. Geometric + Photometric")
+    logger.info("  3. Geometric + Augraphy")
+
+    for idx in range(num_samples):
+        sample = dataset[idx]
+        image = sample["image"]
+        annotations = sample["annotations"]
+
+        image_np = np.array(image.convert("RGB"))
+        bboxes = [ann["bbox"] for ann in annotations]
+        category_ids = [ann["category_id"] for ann in annotations]
+
+        # Clean bboxes
+        clean_bboxes = []
+        clean_cats = []
+        for bbox, cat in zip(bboxes, category_ids, strict=False):
+            x, y, w, h = bbox[:4]
+            if w > 1e-3 and h > 1e-3:
+                clean_bboxes.append([float(x), float(y), float(w), float(h)])
+                clean_cats.append(int(cat))
+
+        if not clean_bboxes:
+            logger.warning("Sample %d has no valid bboxes, skipping", idx)
+            continue
+
+        # Save original with bboxes
+        original_with_boxes = _draw_bboxes_cv2(
+            image_np.copy(), clean_bboxes, clean_cats, class_labels
+        )
+        original_path = output_path / f"sample_{idx:03d}_1_original.jpg"
+        cv2.imwrite(str(original_path), cv2.cvtColor(original_with_boxes, cv2.COLOR_RGB2BGR))
+
+        # Apply photometric augmentation
+        try:
+            examples_photo = {
+                "image": [image_np.copy()],
+                "annotations": [{"bbox": clean_bboxes.copy(), "category_id": clean_cats.copy()}],
+            }
+            augmented_photo = augmentor_photometric.augment(examples_photo)
+
+            aug_image_photo = augmented_photo["image"][0]
+            aug_anns_photo = augmented_photo["annotations"][0]
+            aug_bboxes_photo = aug_anns_photo["bbox"]
+            aug_cats_photo = aug_anns_photo["category_id"]
+
+            photo_with_boxes = _draw_bboxes_cv2(
+                aug_image_photo.copy(), aug_bboxes_photo, aug_cats_photo, class_labels
+            )
+            photo_path = output_path / f"sample_{idx:03d}_2_photometric.jpg"
+            cv2.imwrite(str(photo_path), cv2.cvtColor(photo_with_boxes, cv2.COLOR_RGB2BGR))
+        except Exception as e:
+            logger.error("Error with photometric augmentation on sample %d: %s", idx, e)
+            continue
+
+        # Apply augraphy augmentation
+        try:
+            examples_aug = {
+                "image": [image_np.copy()],
+                "annotations": [{"bbox": clean_bboxes.copy(), "category_id": clean_cats.copy()}],
+            }
+            augmented_aug = augmentor_augraphy.augment(examples_aug)
+
+            aug_image_aug = augmented_aug["image"][0]
+            aug_anns_aug = augmented_aug["annotations"][0]
+            aug_bboxes_aug = aug_anns_aug["bbox"]
+            aug_cats_aug = aug_anns_aug["category_id"]
+
+            aug_with_boxes = _draw_bboxes_cv2(
+                aug_image_aug.copy(), aug_bboxes_aug, aug_cats_aug, class_labels
+            )
+            aug_path = output_path / f"sample_{idx:03d}_3_augraphy.jpg"
+            cv2.imwrite(str(aug_path), cv2.cvtColor(aug_with_boxes, cv2.COLOR_RGB2BGR))
+
+            logger.info("Saved sample %d triplet", idx)
+        except Exception as e:
+            logger.error("Error with augraphy augmentation on sample %d: %s", idx, e)
+            continue
 
 
 def _draw_bboxes(
@@ -89,7 +243,7 @@ def _draw_bboxes(
     labels: list[int],
     class_labels: dict[int, str],
 ) -> np.ndarray:
-    """Render bounding boxes and labels onto an image."""
+    """Render bounding boxes and labels onto an image using PIL."""
     image_draw = Image.fromarray(image_np)
     draw = ImageDraw.Draw(image_draw)
 
@@ -105,6 +259,47 @@ def _draw_bboxes(
         draw.text((x, y - 20), label_name, fill="white", font=font)
 
     return np.array(image_draw)
+
+
+def _draw_bboxes_cv2(
+    image: np.ndarray,
+    bboxes: list,
+    category_ids: list,
+    labels: dict[int, str],
+) -> np.ndarray:
+    """Draw bounding boxes on image for visualization using OpenCV."""
+    # Ensure RGB for consistent colors
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    elif image.ndim == 3 and image.shape[2] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+
+    pil_image = Image.fromarray(image)
+    draw = ImageDraw.Draw(pil_image)
+
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+    except Exception:
+        font = ImageFont.load_default()
+
+    # Define colors (RGB)
+    colors = [
+        (255, 0, 0),  # Red
+        (0, 255, 0),  # Green
+        (0, 0, 255),  # Blue
+        (255, 255, 0),  # Yellow
+        (255, 0, 255),  # Magenta
+    ]
+
+    for bbox, cat_id in zip(bboxes, category_ids, strict=False):
+        x, y, w, h = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+        cat_id = int(cat_id)
+        color = colors[cat_id % len(colors)]
+        draw.rectangle([x, y, x + w, y + h], outline=color, width=2)
+        label = labels.get(cat_id, f"Class {cat_id}")
+        draw.text((x, max(0, y - 20)), label, fill=color, font=font)
+
+    return np.array(pil_image)
 
 
 def _compose_side_by_side(
@@ -171,6 +366,20 @@ def main() -> None:
         default=None,
         help="Optional cache directory for datasets.",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["simple", "comparison"],
+        default="simple",
+        help="Visualization mode: 'simple' for original vs augmented, "
+        "'comparison' for original vs photometric vs augraphy",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config YAML for augmentation settings (optional)",
+    )
     args = parser.parse_args()
 
     visualize_augmentations(
@@ -178,6 +387,8 @@ def main() -> None:
         num_samples=args.num_samples,
         output_dir=args.output_dir,
         cache_dir=args.cache_dir,
+        mode=args.mode,
+        config_path=args.config,
     )
 
 
